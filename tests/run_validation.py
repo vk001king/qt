@@ -1,0 +1,229 @@
+"""Executable validation suite (Phase 6A, first rungs of the 5C ladder).
+
+T1  Plane-wave phase evolution (V1)          -- exactness of both substeps
+T2  Temporal order (Richardson)              -- global 2nd order of Strang
+T3  Harmonic-trap ground state vs Thomas-Fermi (V2)
+T4  LHY integral Q5 vs analytic anchors
+T5  Dipolar kernel: series/branch, bounds, slow-DFT plumbing, Parseval,
+    physical orientation signs (bug classes B1/B2/B7 of Phase 5C)
+T6  Vortex pair: plaquette detection, winding, N/E conservation,
+    Helmholtz split sanity
+
+Run:  python3 tests/run_validation.py
+"""
+import sys, time, json, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import numpy as np
+
+from qtsim import (Grid, EGPESolver, bare_dipolar_symbol,
+                  truncation_bracket, Q5)
+from qtsim.diagnostics import (plaquette_charges_2d, circulation_loop_2d,
+                              helmholtz_split_2d)
+
+rng = np.random.default_rng(7)
+RESULTS = []
+
+
+def record(name, value, criterion, passed):
+    RESULTS.append((name, value, criterion, bool(passed)))
+    print(f"[{'PASS' if passed else 'FAIL'}] {name}: {value}  "
+          f"(criterion: {criterion})")
+
+
+# ----------------------------------------------------------------- T1
+def t1_plane_wave():
+    g = Grid((64, 64), (16.0, 16.0))
+    m = 3
+    k = 2 * np.pi * m / g.lengths[0]
+    A = 1.0
+    s = EGPESolver(g)
+    s.psi = A * np.exp(1j * k * g.X[0])
+    T, dt = 1.0, 1e-3
+    s.step_real(dt, int(T / dt))
+    exact = A * np.exp(1j * (k * g.X[0] - (k * k + A * A) * T))
+    err = float(np.max(np.abs(s.psi - exact)))
+    record("T1 plane-wave max error", f"{err:.3e}", "< 1e-10", err < 1e-10)
+
+
+# ----------------------------------------------------------------- T2
+def t2_order():
+    g = Grid((64, 64), (16.0, 16.0))
+    r2 = g.X[0] ** 2 + g.X[1] ** 2
+    psi0 = np.exp(-r2 / 8.0) * np.exp(0.5j * g.X[0])
+    T = 0.256  # divides exactly by all three dt values below
+    finals = {}
+    for dt in (4e-3, 2e-3, 1e-3):
+        s = EGPESolver(g)
+        s.psi = psi0.copy()
+        nst = int(round(T / dt))
+        assert abs(nst * dt - T) < 1e-12, "dt must divide T exactly"
+        s.step_real(dt, nst)
+        finals[dt] = s.psi.copy()
+    e1 = np.sqrt(g.integrate(np.abs(finals[4e-3] - finals[1e-3]) ** 2))
+    e2 = np.sqrt(g.integrate(np.abs(finals[2e-3] - finals[1e-3]) ** 2))
+    # against dt/4 reference: e(dt) ~ C(dt^2 - dt_ref^2): ratio -> (16-1)/(4-1)=5
+    order = np.log2(e1 / e2) / np.log2(2.0)
+    # exact expected ratio for 2nd order with this reference: 15/3 = 5 -> log2(5)=2.32
+    ratio = e1 / e2
+    ok = 4.5 < ratio < 5.5
+    record("T2 Strang error ratio e(4dt)/e(2dt)", f"{ratio:.3f}",
+           "5.0 +/- 0.5 (2nd order, dt/4 ref)", ok)
+
+
+# ----------------------------------------------------------------- T3
+def t3_thomas_fermi():
+    t0 = time.time()
+    g = Grid((192, 192), (52.0, 52.0))
+    om, N = 0.15, 2000.0
+    V = 0.5 * om ** 2 * (g.X[0] ** 2 + g.X[1] ** 2)
+    mu_tf = om * np.sqrt(N / np.pi)
+    n_tf = np.maximum(mu_tf - V, 0.0)
+    s = EGPESolver(g, V=V)
+    s.psi = np.sqrt(n_tf).astype(complex)
+    s.psi *= np.sqrt(N / s.norm())
+    s.step_imag(0.004, 6000, norm_target=N)
+    s.step_imag(0.001, 6000, norm_target=N)
+    s.step_imag(0.00025, 4000, norm_target=N)
+    mu, res = s.mu_and_residual()
+    n = np.abs(s.psi) ** 2
+    R_tf = np.sqrt(2 * mu_tf) / om
+    interior = (g.X[0] ** 2 + g.X[1] ** 2) < (0.75 * R_tf) ** 2
+    rms = float(np.sqrt(np.mean((n[interior] - n_tf[interior]) ** 2))
+                / n_tf.max())
+    dmu = abs(mu - mu_tf) / mu_tf
+    record("T3 stationarity residual", f"{res:.3e}", "< 1e-5", res < 1e-5)
+    record("T3 interior rms(n - n_TF)/n_peak", f"{rms:.3e}",
+           "< 3e-2 (TF regime)", rms < 3e-2)
+    record("T3 |mu - mu_TF|/mu_TF", f"{dmu:.3e}",
+           "< 5e-2 (TF neglects kinetic edge)", dmu < 5e-2)
+    print(f"      (T3 runtime {time.time()-t0:.1f} s, mu={mu:.4f}, "
+          f"mu_TF={mu_tf:.4f})")
+
+
+# ----------------------------------------------------------------- T4
+def t4_q5():
+    e0 = abs(Q5(0.0) - 1.0)
+    q1_exact = 3.0 ** 2.5 / 6.0
+    e1 = abs(Q5(1.0) - q1_exact) / q1_exact
+    q15 = Q5(1.5)
+    record("T4 |Q5(0)-1|", f"{e0:.2e}", "< 1e-13", e0 < 1e-13)
+    record("T4 rel err Q5(1) vs 3^{5/2}/6", f"{e1:.2e}", "< 1e-6",
+           e1 < 1e-6)
+    record("T4 Q5(1.5) finite real (Re-convention)", f"{q15:.6f}",
+           "finite, > Q5(1)", np.isfinite(q15) and q15 > q1_exact)
+
+
+# ----------------------------------------------------------------- T5
+def t5_kernels():
+    # (a) bracket: series vs direct evaluation at x=0.02 (direct still safe)
+    x = 0.02
+    direct = 1 + 3 * np.cos(x) / x ** 2 - 3 * np.sin(x) / x ** 3
+    series = x ** 2 / 10 - x ** 4 / 280
+    rel = abs(direct - series) / abs(series)
+    record("T5a bracket series vs direct @x=0.02", f"{rel:.2e}", "< 1e-6",
+           rel < 1e-6)
+    # (b) bare-kernel bounds and k=0
+    g3 = Grid((16, 16, 16), (8.0, 8.0, 8.0))
+    D = bare_dipolar_symbol(g3, (0, 0, 1))
+    ok = (abs(D.min() + 1) < 1e-12 and abs(D.max() - 2) < 1e-12
+          and D.flat[0] == 0.0)
+    record("T5b bare symbol in [-1,2], D(0)=0",
+           f"min={D.min():.3f}, max={D.max():.3f}", "exact bounds", ok)
+    # (c) slow-DFT plumbing check (bug classes B1/B2)
+    c = rng.uniform(-2, 2, 3)
+    r2 = sum((X - ci) ** 2 for X, ci in zip(g3.X, c))
+    n = np.exp(-r2 / 2.0)
+    nk = np.fft.fftn(n)
+    Phi_fft = np.fft.ifftn(D * nk).real
+    idx = [tuple(rng.integers(0, 16, 3)) for _ in range(3)]
+    worst = 0.0
+    for ix in idx:
+        # DFT convention: index j corresponds to x_j = j*dx (origin at j=0),
+        # NOT the centered coordinate X (= j*dx - L/2 here).  Using X would
+        # inject a spurious e^{ik L/2} per mode -- exactly the B1/B2 bug
+        # class this check exists to catch.
+        r = np.array([ix[d] * g3.dx[d] for d in range(3)])
+        phase = sum(g3.K[d] * r[d] for d in range(3))
+        slow = np.sum(D * nk * np.exp(1j * phase)).real / g3.Ntot
+        worst = max(worst, abs(slow - Phi_fft[ix]) / max(abs(slow), 1e-30))
+    record("T5c FFT vs slow-DFT max rel diff", f"{worst:.2e}", "< 1e-10",
+           worst < 1e-10)
+    # (d) Parseval
+    p = abs(np.sum(n * n) - np.sum(np.abs(nk) ** 2) / g3.Ntot) / np.sum(n*n)
+    record("T5d Parseval rel residual", f"{p:.2e}", "< 1e-12", p < 1e-12)
+    # (e) physical orientation signs (decisive for axis wiring)
+    g = Grid((32, 32, 32), (16.0, 16.0, 16.0))
+    Dz = bare_dipolar_symbol(g, (0, 0, 1))
+    def Edd(sig_perp, sig_z):
+        nn = np.exp(-(g.X[0] ** 2 + g.X[1] ** 2) / (2 * sig_perp ** 2)
+                    - g.X[2] ** 2 / (2 * sig_z ** 2))
+        Phi = np.fft.ifftn(Dz * np.fft.fftn(nn)).real
+        return 0.5 * g.integrate(Phi * nn)
+    E_pro, E_obl = Edd(1.2, 3.6), Edd(3.6, 1.2)
+    ok = (E_pro < 0) and (E_obl > 0)
+    record("T5e orientation: E_dd(prolate)<0<E_dd(oblate)",
+           f"{E_pro:.3f} / {E_obl:.3f}", "sign test", ok)
+
+
+# ----------------------------------------------------------------- T6
+def t6_vortex():
+    g = Grid((128, 128), (32.0, 32.0))
+    # Offset cores in both x AND y by half a grid spacing: arctan2 has its
+    # branch cut along y=0 (negative-x direction from each core), and if
+    # the cut aligns exactly with a grid line the plaquette method hits
+    # the classic pi-ambiguity (wrap(pi)=-pi flips the winding).
+    # Diagnosed live: at y=0 the phase jump across the cut was exactly pi,
+    # making the core invisible to the detector.
+    dx = g.dx[0]
+    xp, xm = 4.0 + 0.5 * dx, -4.0 + 0.5 * dx
+    yc = 0.5 * dx
+    thp = np.arctan2(g.X[1] - yc, g.X[0] - xp)
+    thm = np.arctan2(g.X[1] - yc, g.X[0] - xm)
+    rp = np.sqrt((g.X[0] - xp) ** 2 + (g.X[1] - yc) ** 2)
+    rm = np.sqrt((g.X[0] - xm) ** 2 + (g.X[1] - yc) ** 2)
+    psi = np.tanh(rp) * np.tanh(rm) * np.exp(1j * (thp - thm))
+    s = EGPESolver(g)
+    s.psi = psi
+    # Detect on the RAW imprint: the pair phase is only approximately
+    # periodic, and imaginary-time smoothing in the periodic box lets the
+    # boundary mismatch migrate charges (observed as (2,0)/(0,2) counts).
+    q = plaquette_charges_2d(s.psi)
+    npos, nneg = int((q == 1).sum()), int((q == -1).sum())
+    record("T6 plaquette detection (+1,-1) counts", f"({npos},{nneg})",
+           "(1,1)", (npos, nneg) == (1, 1))
+    w = circulation_loop_2d(s.psi, g, (xp, yc), 2.5)
+    record("T6 winding around + core", f"{w:.4f}", "1.00 +/- 0.02",
+           abs(w - 1.0) < 0.02)
+    # Smooth the crude tanh imprint briefly in imaginary time (removes the
+    # artificial density transient while topology is preserved), THEN
+    # measure the decomposition on this vortex-dominated state.  Measuring
+    # after 500 real-time steps of the raw ansatz was a test-design error:
+    # the imprint transient legitimately radiates strong sound (large Ec).
+    s.step_imag(5e-3, 200)
+    Ei, Ec, _ = helmholtz_split_2d(s.psi, g)
+    Ei0, Ec0, _ = helmholtz_split_2d(np.abs(s.psi).astype(complex), g)
+    record("T6 Helmholtz on smoothed pair: vortex flow incompressible",
+           f"Ei={Ei:.3f}, Ec={Ec:.3f}; phaseless Ei={Ei0:.1e}",
+           "Ei > Ec and phaseless < 1e-4*Ei",
+           Ei > Ec and Ei0 < 1e-4 * Ei)
+    N0, E0 = s.norm(), s.energy()["total"]
+    s.step_real(2e-3, 500)
+    dN = abs(s.norm() - N0) / N0
+    dE = abs(s.energy()["total"] - E0) / abs(E0)
+    record("T6 |dN|/N over 500 steps", f"{dN:.2e}", "< 1e-12", dN < 1e-12)
+    record("T6 |dE|/E over 500 steps", f"{dE:.2e}", "< 1e-4", dE < 1e-4)
+
+
+if __name__ == "__main__":
+    t_start = time.time()
+    for t in (t1_plane_wave, t2_order, t3_thomas_fermi, t4_q5,
+              t5_kernels, t6_vortex):
+        t()
+    npass = sum(1 for *_, p in RESULTS if p)
+    print(f"\n== {npass}/{len(RESULTS)} checks passed "
+          f"({time.time()-t_start:.1f} s total) ==")
+    with open(os.path.join(os.path.dirname(__file__), "..",
+                           "VALIDATION_RESULTS.json"), "w") as f:
+        json.dump([{ "name": n, "value": v, "criterion": c, "pass": p}
+                   for n, v, c, p in RESULTS], f, indent=1)
+    sys.exit(0 if npass == len(RESULTS) else 1)

@@ -1,0 +1,110 @@
+[
+ {
+  "name": "T1 plane-wave max error",
+  "value": "2.082e-13",
+  "criterion": "< 1e-10",
+  "pass": true
+ },
+ {
+  "name": "T2 Strang error ratio e(4dt)/e(2dt)",
+  "value": "5.000",
+  "criterion": "5.0 +/- 0.5 (2nd order, dt/4 ref)",
+  "pass": true
+ },
+ {
+  "name": "T3 stationarity residual",
+  "value": "3.691e-06",
+  "criterion": "< 1e-5",
+  "pass": true
+ },
+ {
+  "name": "T3 interior rms(n - n_TF)/n_peak",
+  "value": "1.386e-03",
+  "criterion": "< 3e-2 (TF regime)",
+  "pass": true
+ },
+ {
+  "name": "T3 |mu - mu_TF|/mu_TF",
+  "value": "2.657e-03",
+  "criterion": "< 5e-2 (TF neglects kinetic edge)",
+  "pass": true
+ },
+ {
+  "name": "T4 |Q5(0)-1|",
+  "value": "2.22e-16",
+  "criterion": "< 1e-13",
+  "pass": true
+ },
+ {
+  "name": "T4 rel err Q5(1) vs 3^{5/2}/6",
+  "value": "7.18e-15",
+  "criterion": "< 1e-6",
+  "pass": true
+ },
+ {
+  "name": "T4 Q5(1.5) finite real (Re-convention)",
+  "value": "4.623790",
+  "criterion": "finite, > Q5(1)",
+  "pass": true
+ },
+ {
+  "name": "T5a bracket series vs direct @x=0.02",
+  "value": "4.12e-09",
+  "criterion": "< 1e-6",
+  "pass": true
+ },
+ {
+  "name": "T5b bare symbol in [-1,2], D(0)=0",
+  "value": "min=-1.000, max=2.000",
+  "criterion": "exact bounds",
+  "pass": true
+ },
+ {
+  "name": "T5c FFT vs slow-DFT max rel diff",
+  "value": "2.92e-14",
+  "criterion": "< 1e-10",
+  "pass": true
+ },
+ {
+  "name": "T5d Parseval rel residual",
+  "value": "1.60e-16",
+  "criterion": "< 1e-12",
+  "pass": true
+ },
+ {
+  "name": "T5e orientation: E_dd(prolate)<0<E_dd(oblate)",
+  "value": "-10.299 / 42.999",
+  "criterion": "sign test",
+  "pass": true
+ },
+ {
+  "name": "T6 plaquette detection (+1,-1) counts",
+  "value": "(1,1)",
+  "criterion": "(1,1)",
+  "pass": true
+ },
+ {
+  "name": "T6 winding around + core",
+  "value": "1.0000",
+  "criterion": "1.00 +/- 0.02",
+  "pass": true
+ },
+ {
+  "name": "T6 Helmholtz on smoothed pair: vortex flow incompressible",
+  "value": "Ei=88.145, Ec=14.379; phaseless Ei=1.1e-27",
+  "criterion": "Ei > Ec and phaseless < 1e-4*Ei",
+  "pass": true
+ },
+ {
+  "name": "T6 |dN|/N over 500 steps",
+  "value": "5.79e-14",
+  "criterion": "< 1e-12",
+  "pass": true
+ },
+ {
+  "name": "T6 |dE|/E over 500 steps",
+  "value": "2.53e-09",
+  "criterion": "< 1e-4",
+  "pass": true
+ }
+]

@@ -1,0 +1,330 @@
+"""Structured output archive for Google Drive (or any filesystem).
+
+Directory layout created and maintained automatically:
+
+    Research/
+      Quantum_Turbulence/
+        _ARCHIVE_INDEX.json           <- master index of every run ever made
+        2026-07-23_1432_validation/
+            RUN_INFO.json             <- title, timestamp, parameters, status
+            validation_results.json
+        2026-07-23_1455_supersolid-groundstate-eps1.40/
+            RUN_INFO.json
+            checkpoints/
+                ckpt_step00000500.npz
+                ckpt_step00001000.npz
+            diagnostics/
+                diagnostics.json
+            figures/
+                density.png
+        2026-07-24_0903_stirred-tangle-eps1.30-Ma0.50-s0/
+            ...
+
+Design rules (per user specification):
+  * Every folder is checked for existence before use; created only if absent.
+  * Each run gets its OWN folder named  <date>_<time>_<title-slug>.
+  * Every output is written inside that run folder, never at top level.
+  * A machine-readable index is updated after every run so nothing is lost.
+"""
+from __future__ import annotations
+
+import json
+import os
+import platform
+import re
+import time
+from datetime import datetime
+
+# ---------------------------------------------------------------- constants
+DEFAULT_BASE = "Research"
+DEFAULT_PROJECT = "Quantum_Turbulence"
+INDEX_NAME = "_ARCHIVE_INDEX.json"
+RUN_INFO_NAME = "RUN_INFO.json"
+SUBDIRS = ("checkpoints", "diagnostics", "figures", "logs")
+
+
+# ---------------------------------------------------------------- utilities
+def _slug(text: str, maxlen: int = 60) -> str:
+    """Filesystem-safe slug: lowercase, dashes, no exotic characters."""
+    s = re.sub(r"[^\w\s.-]", "", str(text)).strip().lower()
+    s = re.sub(r"[\s_]+", "-", s)
+    s = re.sub(r"-{2,}", "-", s).strip("-.")
+    return (s[:maxlen].rstrip("-.") or "run")
+
+
+def ensure_dir(path: str, verbose: bool = True) -> str:
+    """Check whether a directory exists; create it only if it does not.
+
+    Returns the path.  Prints which of the two happened (the user asked
+    explicitly for the check-then-proceed behaviour to be visible).
+    """
+    if os.path.isdir(path):
+        if verbose:
+            print(f"  [exists ] {path}")
+    else:
+        os.makedirs(path, exist_ok=True)
+        if verbose:
+            print(f"  [created] {path}")
+    return path
+
+
+def mount_drive(verbose: bool = True) -> str:
+    """Mount Google Drive when running in Colab; fall back to local disk.
+
+    Returns the root under which the Research tree will be built.
+    """
+    try:
+        from google.colab import drive  # type: ignore
+        if not os.path.isdir("/content/drive/MyDrive"):
+            drive.mount("/content/drive")
+        else:
+            if verbose:
+                print("  [exists ] Google Drive already mounted")
+        return "/content/drive/MyDrive"
+    except Exception:
+        root = os.path.abspath("./drive_local")
+        if verbose:
+            print(f"  Not running in Colab -> using local root: {root}")
+        ensure_dir(root, verbose=verbose)
+        return root
+
+
+# ---------------------------------------------------------------- archive
+class Archive:
+    """Structured, timestamped run archive rooted in Google Drive.
+
+    Example
+    -------
+    >>> arc = Archive()                       # mounts Drive, builds tree
+    >>> run = arc.new_run("stirred tangle", params={"eps_dd": 1.3})
+    >>> run.save_checkpoint(psi, step=500, t=10.0)
+    >>> run.save_diagnostics(records)
+    >>> run.finish(status="completed")
+    """
+
+    def __init__(self, base: str = DEFAULT_BASE,
+                 project: str = DEFAULT_PROJECT,
+                 root: str | None = None, verbose: bool = True):
+        print("Preparing archive tree...")
+        self.root = root if root is not None else mount_drive(verbose)
+        self.base_dir = ensure_dir(os.path.join(self.root, base), verbose)
+        self.project_dir = ensure_dir(os.path.join(self.base_dir, project),
+                                      verbose)
+        self.index_path = os.path.join(self.project_dir, INDEX_NAME)
+        self._ensure_index(verbose)
+        print(f"Archive ready: {self.project_dir}\n")
+
+    # -- index -----------------------------------------------------------
+    def _ensure_index(self, verbose: bool = True) -> None:
+        if os.path.isfile(self.index_path):
+            if verbose:
+                n = len(self.load_index().get("runs", []))
+                print(f"  [exists ] {INDEX_NAME}  ({n} previous run(s))")
+        else:
+            payload = {
+                "project": "Quantum turbulence in a dipolar supersolid",
+                "created": datetime.now().isoformat(timespec="seconds"),
+                "runs": [],
+            }
+            with open(self.index_path, "w") as fh:
+                json.dump(payload, fh, indent=1)
+            if verbose:
+                print(f"  [created] {INDEX_NAME}")
+
+    def load_index(self) -> dict:
+        try:
+            with open(self.index_path) as fh:
+                return json.load(fh)
+        except Exception:
+            return {"runs": []}
+
+    def _append_index(self, entry: dict) -> None:
+        idx = self.load_index()
+        idx.setdefault("runs", []).append(entry)
+        idx["last_updated"] = datetime.now().isoformat(timespec="seconds")
+        with open(self.index_path, "w") as fh:
+            json.dump(idx, fh, indent=1)
+
+    def _update_index(self, run_id: str, **fields) -> None:
+        idx = self.load_index()
+        for r in idx.get("runs", []):
+            if r.get("run_id") == run_id:
+                r.update(fields)
+                break
+        idx["last_updated"] = datetime.now().isoformat(timespec="seconds")
+        with open(self.index_path, "w") as fh:
+            json.dump(idx, fh, indent=1)
+
+    # -- runs ------------------------------------------------------------
+    def new_run(self, title: str, params: dict | None = None,
+                verbose: bool = True) -> "Run":
+        """Create a fresh timestamped run folder titled <date>_<time>_<title>."""
+        now = datetime.now()
+        stamp = now.strftime("%Y-%m-%d_%H%M")
+        run_id = f"{stamp}_{_slug(title)}"
+        run_dir = os.path.join(self.project_dir, run_id)
+
+        # collision guard (two runs launched in the same minute)
+        if os.path.isdir(run_dir):
+            run_id = f"{now.strftime('%Y-%m-%d_%H%M%S')}_{_slug(title)}"
+            run_dir = os.path.join(self.project_dir, run_id)
+
+        print(f"Creating run folder for '{title}':")
+        ensure_dir(run_dir, verbose)
+        for sub in SUBDIRS:
+            ensure_dir(os.path.join(run_dir, sub), verbose)
+
+        info = {
+            "run_id": run_id,
+            "title": title,
+            "started": now.isoformat(timespec="seconds"),
+            "started_human": now.strftime("%d %B %Y, %H:%M:%S"),
+            "status": "running",
+            "parameters": params or {},
+            "environment": {
+                "python": platform.python_version(),
+                "platform": platform.platform(),
+            },
+            "files": {},
+        }
+        with open(os.path.join(run_dir, RUN_INFO_NAME), "w") as fh:
+            json.dump(info, fh, indent=1)
+
+        self._append_index({
+            "run_id": run_id, "title": title,
+            "started": info["started"], "status": "running",
+            "parameters": params or {},
+        })
+        print(f"Run folder ready: {run_dir}\n")
+        return Run(self, run_dir, info)
+
+    def list_runs(self) -> list:
+        """Print and return every run recorded in the index."""
+        runs = self.load_index().get("runs", [])
+        if not runs:
+            print("No runs recorded yet.")
+            return runs
+        print(f"{len(runs)} run(s) in {self.project_dir}:\n")
+        for r in runs:
+            print(f"  {r.get('started','?')}  [{r.get('status','?'):9s}]  "
+                  f"{r.get('title','?')}")
+            print(f"      folder: {r.get('run_id','?')}")
+        return runs
+
+    def latest_run_dir(self, title_contains: str | None = None) -> str | None:
+        """Path of the most recent run, optionally filtered by title."""
+        runs = self.load_index().get("runs", [])
+        if title_contains:
+            runs = [r for r in runs
+                    if title_contains.lower() in r.get("title", "").lower()]
+        if not runs:
+            return None
+        return os.path.join(self.project_dir, runs[-1]["run_id"])
+
+
+class Run:
+    """A single timestamped run folder; all outputs go through this object."""
+
+    def __init__(self, archive: Archive, run_dir: str, info: dict):
+        self.archive = archive
+        self.dir = run_dir
+        self.info = info
+        self.run_id = info["run_id"]
+        self._t0 = time.time()
+
+    # -- internal --------------------------------------------------------
+    def _register(self, category: str, path: str) -> None:
+        self.info.setdefault("files", {}).setdefault(category, []).append(
+            os.path.basename(path))
+        self._write_info()
+
+    def _write_info(self) -> None:
+        with open(os.path.join(self.dir, RUN_INFO_NAME), "w") as fh:
+            json.dump(self.info, fh, indent=1)
+
+    def path(self, *parts) -> str:
+        return os.path.join(self.dir, *parts)
+
+    # -- saving ----------------------------------------------------------
+    def save_checkpoint(self, psi, step: int, t: float, extra: dict | None = None,
+                        verbose: bool = True) -> str:
+        """Save the wavefunction with step number and simulation time."""
+        import numpy as np
+        stamp = datetime.now().strftime("%H%M%S")
+        fname = self.path("checkpoints",
+                          f"ckpt_step{int(step):08d}_t{t:09.2f}_{stamp}.npz")
+        payload = {"psi": psi, "step": int(step), "t": float(t),
+                   "wall_clock": datetime.now().isoformat(timespec="seconds")}
+        if extra:
+            payload.update({k: v for k, v in extra.items()
+                            if isinstance(v, (int, float, str))})
+        np.savez_compressed(fname, **payload)
+        self._register("checkpoints", fname)
+        if verbose:
+            print(f"    saved checkpoint -> {os.path.basename(fname)}")
+        return fname
+
+    def save_diagnostics(self, records, name: str = "diagnostics",
+                         verbose: bool = True) -> str:
+        fname = self.path("diagnostics", f"{_slug(name)}.json")
+        with open(fname, "w") as fh:
+            json.dump(records, fh, indent=1)
+        self._register("diagnostics", fname)
+        if verbose:
+            n = len(records) if hasattr(records, "__len__") else "?"
+            print(f"    saved diagnostics -> {os.path.basename(fname)} "
+                  f"({n} record(s))")
+        return fname
+
+    def save_figure(self, fig, name: str, dpi: int = 150,
+                    verbose: bool = True) -> str:
+        fname = self.path("figures", f"{_slug(name)}.png")
+        fig.savefig(fname, dpi=dpi, bbox_inches="tight")
+        self._register("figures", fname)
+        if verbose:
+            print(f"    saved figure -> {os.path.basename(fname)}")
+        return fname
+
+    def save_text(self, text: str, name: str, verbose: bool = True) -> str:
+        fname = self.path("logs", f"{_slug(name)}.txt")
+        with open(fname, "w") as fh:
+            fh.write(text)
+        self._register("logs", fname)
+        if verbose:
+            print(f"    saved log -> {os.path.basename(fname)}")
+        return fname
+
+    # -- loading ---------------------------------------------------------
+    def latest_checkpoint(self) -> str | None:
+        d = self.path("checkpoints")
+        files = sorted(f for f in os.listdir(d) if f.endswith(".npz")) \
+            if os.path.isdir(d) else []
+        return os.path.join(d, files[-1]) if files else None
+
+    @staticmethod
+    def load_checkpoint(fname: str):
+        """Reload (psi, step, t) from a checkpoint file."""
+        import numpy as np
+        data = np.load(fname)
+        step, t = int(data["step"]), float(data["t"])
+        print(f"  Loaded {os.path.basename(fname)}: step={step}, t={t:.2f}")
+        return data["psi"], step, t
+
+    # -- lifecycle -------------------------------------------------------
+    def finish(self, status: str = "completed", notes: str = "",
+               verbose: bool = True) -> None:
+        ended = datetime.now()
+        self.info["status"] = status
+        self.info["ended"] = ended.isoformat(timespec="seconds")
+        self.info["ended_human"] = ended.strftime("%d %B %Y, %H:%M:%S")
+        self.info["duration_seconds"] = round(time.time() - self._t0, 1)
+        if notes:
+            self.info["notes"] = notes
+        self._write_info()
+        self.archive._update_index(
+            self.run_id, status=status, ended=self.info["ended"],
+            duration_seconds=self.info["duration_seconds"])
+        if verbose:
+            print(f"\nRun '{self.info['title']}' {status} in "
+                  f"{self.info['duration_seconds']} s")
+            print(f"  Folder: {self.dir}")
