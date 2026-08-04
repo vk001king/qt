@@ -7,6 +7,15 @@
       instabilities are actually exercised.
 - [x] Ground-state modulation test now reports wavelength, not just
       contrast, and flags box-scale artifacts.
+- [x] Stirring protocol rewritten: v1.0 produced zero vortices because
+      the obstacle was 0.22*mu and the flow was Mach 0.35.  Now V0 = 3*mu
+      at Mach 1.1, verified to nucleate a saturating tangle (~200 vortices)
+      that then decays.  Drive evaluated at the substep midpoint.
+
+## Known accuracy gap
+- [ ] Dipolar ground-state stationarity residual is ~1e-2, not the 1e-8
+      target.  Expected to be a symptom of the box-scale mode; recheck
+      after the quasi-2D kernel lands (V4).
 
 ## Code
 - [ ] Quasi-2D projected dipolar kernel (pancake geometry).  The current 2D

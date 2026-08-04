@@ -29,7 +29,7 @@ from .diagnostics import (
 from .drive_io import Archive, Run, ensure_dir, mount_drive
 from . import diagnostics
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 __all__ = [
     "Grid",

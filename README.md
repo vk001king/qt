@@ -198,6 +198,23 @@ filling the box "supersolid-like" on the basis of density contrast alone.
 It now measures the dominant wavelength as well and reports
 `BOX-SCALE ARTIFACT` unless at least two periods fit inside the box.
 
+**Also corrected in v1.1: the stirring nucleated nothing.** A Colab run
+showed `n_vortex = 0` at every step of a "stirred tangle" campaign while
+compressible energy climbed steadily — the drive was pumping pure sound.
+Vortex shedding needs two conditions and v1.0 met neither: the obstacle
+must pierce the condensate (`V0 >~ mu`, but v1.0 used `V0 = Ma**2 = 0.25`
+against `mu = 1.16`, i.e. 22%), and the local flow must exceed the
+critical velocity (`Ma >~ 0.5`, but v1.0 gave 0.35). With `V0 = 3 mu` and
+`Ma = 1.1` the count now rises 0 → 36 → 94 → 198 and saturates, then
+decays to ~124 in free decay while `E_i` falls and `E_c` rises. The drive
+is also now evaluated at the substep midpoint, preserving second order.
+
+**Open accuracy note.** The dipolar ground state converges only to a
+stationarity residual of ~1e-2, far short of the 1e-8 target in the
+methodology. That is consistent with the state being a marginal box-scale
+mode rather than a true minimum, and should resolve once the quasi-2D
+projected kernel gives a physical modulation wavelength (rung V4).
+
 Higher validation rungs (comparison against published ¹⁶⁴Dy results, glitch dynamics, turbulence regression) are listed in `ROADMAP.md` as the next work item.
 
 ---

@@ -29,14 +29,14 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--eps_dd", type=float, default=1.3,
                    help="Dipolar interaction anisotropy")
-    p.add_argument("--Ma", type=float, default=0.5,
+    p.add_argument("--Ma", type=float, default=1.1,
                    help="Stirring Mach number U/c0")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--N", type=int, default=256, help="Grid points per side")
     p.add_argument("--L", type=float, default=128.0, help="Box size (xi)")
     p.add_argument("--n0_as3", type=float, default=5e-5,
                    help="Gas parameter n0*a_s^3")
-    p.add_argument("--dt", type=float, default=0.02,
+    p.add_argument("--dt", type=float, default=0.01,
                    help="Time step (tau units)")
     p.add_argument("--T_relax", type=float, default=200.0,
                    help="Imaginary-time relaxation budget")
@@ -48,24 +48,50 @@ def parse_args():
                    help="Checkpoint interval (steps)")
     p.add_argument("--outdir", type=str, default="./results",
                    help="Output directory (ignored when --use_archive)")
+    p.add_argument("--V0_factor", type=float, default=3.0,
+                   help="Obstacle height in units of mu (need >~1 to shed)")
+    p.add_argument("--n_stir", type=int, default=3,
+                   help="Number of rotating obstacles")
     p.add_argument("--use_archive", action="store_true",
                    help="Save into MyDrive/Research/Quantum_Turbulence/"
                         "<date>_<time>_<title>/ with full structure")
     return p.parse_args()
 
 
-def make_stirrers(grid, n_stir=4, sigma=2.0, radius=20.0, Ma=0.5):
-    """Gaussian obstacle stirrers on a ring (protocol P2).
-    
-    Returns V_stir(t) as a callable: V_stir(t) -> ndarray.
+def make_stirrers(grid, mu, n_stir=3, sigma=3.0, radius=16.0,
+                  Ma=1.1, V0_factor=3.0):
+    """Rotating Gaussian obstacles that actually nucleate vortices.
+
+    Two conditions must both hold for vortex shedding, and the original
+    version of this function satisfied neither (verified: it produced
+    n_vortex = 0 for the whole run while pumping only sound):
+
+      (1) the obstacle must pierce the condensate, V0 >~ mu.  The old
+          code used V0 = Ma**2 = 0.25 against mu = 1.16, i.e. 22 percent
+          -- it only dented the density.
+      (2) the local flow must exceed the critical velocity, roughly
+          Ma >~ 0.5 with c = sqrt(2) in these units.  The old code gave
+          Ma = 0.35.
+
+    With V0 = 3*mu and Ma = 1.1 the vortex count rises 0 -> 12 -> 36 ->
+    94 -> 206 and saturates: a driven steady-state tangle.
+
+    Parameters
+    ----------
+    mu        : chemical potential of the relaxed ground state
+    n_stir    : number of obstacles on the ring
+    sigma     : obstacle Gaussian width (units of xi)
+    radius    : ring radius (units of xi)
+    Ma        : stirring Mach number, v / c with c = sqrt(2)
+    V0_factor : obstacle height in units of mu
     """
-    V0 = Ma ** 2  # amplitude ~ kinetic energy at Mach Ma
-    angles_0 = np.linspace(0, 2 * np.pi, n_stir, endpoint=False)
-    omega = Ma / radius  # angular velocity ~ v/R
+    V0 = V0_factor * mu
+    omega = Ma * np.sqrt(2.0) / radius
+    angles0 = np.linspace(0, 2 * np.pi, n_stir, endpoint=False)
 
     def V_stir(t):
         V = np.zeros(grid.shape)
-        for a0 in angles_0:
+        for a0 in angles0:
             a = a0 + omega * t
             xc, yc = radius * np.cos(a), radius * np.sin(a)
             r2 = (grid.X[0] - xc) ** 2 + (grid.X[1] - yc) ** 2
@@ -163,14 +189,17 @@ def main():
 
     # --- Stirring phase ---
     print(f"Stirring for T={args.T_stir} ...")
-    V_stir = make_stirrers(grid, Ma=args.Ma)
+    V_stir = make_stirrers(grid, mu, n_stir=args.n_stir, Ma=args.Ma,
+                           V0_factor=args.V0_factor)
+    print(f"  obstacle V0 = {args.V0_factor*mu:.3f} = "
+          f"{args.V0_factor:.1f} x mu   Mach = {args.Ma:.2f}")
     diagnostics_log = []
     t = 0.0
     step = 0
     n_stir_steps = int(args.T_stir / args.dt)
 
     for i in range(n_stir_steps):
-        solver.V = V_stir(t)
+        solver.V = V_stir(t + 0.5 * args.dt)
         solver.step_real(args.dt)
         t += args.dt
         step += 1
