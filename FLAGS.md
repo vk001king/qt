@@ -1,5 +1,13 @@
 # Open items
 
+## Fixed in v1.1
+- [x] Temporal-aliasing blow-up: solver now rejects dt with
+      k_max^2*dt > 2 rad/step (T7 regression tests).
+- [x] Notebook test harness no longer shortens loops, so long-time
+      instabilities are actually exercised.
+- [x] Ground-state modulation test now reports wavelength, not just
+      contrast, and flags box-scale artifacts.
+
 ## Code
 - [ ] Quasi-2D projected dipolar kernel (pancake geometry).  The current 2D
       kernel is the bare periodic symbol: fine for demonstration, but the

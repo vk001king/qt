@@ -28,20 +28,9 @@ SHORTEN = [
      "if True:  # sandbox: repo already local"),
     (r"subprocess\.run\(\['git', '-C', DEST, 'pull', '-q'\], check=False\)",
      "print('(sandbox: skipping git pull)')"),
-    # shrink the expensive loops
-    (r"for k in range\(5000\):", "for k in range(600):"),
-    (r"s\.step_imag\(0\.005, 4000, norm_target=Nt\)",
-     "s.step_imag(0.005, 400, norm_target=Nt)"),
-    (r"s\.step_imag\(0\.001, 4000, norm_target=Nt\)",
-     "s.step_imag(0.001, 400, norm_target=Nt)"),
-    (r"run\.save_checkpoint\(s\.psi, step=8000, t=0\.0\)",
-     "run.save_checkpoint(s.psi, step=800, t=0.0)"),
-    # shrink the campaign subprocess
-    (r"'--N', '128', '--L', '64',", "'--N', '48', '--L', '24',"),
-    (r"'--T_relax', '20', '--T_stir', '20', '--T_decay', '40',",
-     "'--T_relax', '3', '--T_stir', '3', '--T_decay', '3',"),
-    (r"'--checkpoint_every', '200', '--use_archive'\]",
-     "'--checkpoint_every', '100', '--use_archive']"),
+    # NO loop shortening.  v1.0 shortened cell 3 to t=12 and therefore
+    # never reached the t~35 blow-up that hit the user in Colab.  Every
+    # loop now runs at full length, exactly as Colab will run it.
 ]
 
 

@@ -11,7 +11,10 @@ Complexity: 4 FFTs/step without dipolar term, 6 with; O(N log N).
 Memory: ~6 complex arrays of grid size.
 """
 from __future__ import annotations
+import warnings
+
 import numpy as np
+
 from .kernels import Grid
 
 _fft, _ifft = np.fft.fftn, np.fft.ifftn
@@ -52,8 +55,53 @@ class EGPESolver:
                 + self.gamma * n ** 1.5)
 
     # ------------------------------------------------------------------
-    def step_real(self, dt: float, nsteps: int = 1):
-        """Real-time Strang steps (norm-conserving to round-off)."""
+    # Timestep stability guard.
+    #
+    # The kinetic substep applies exp(-i k^2 dt) exactly, so there is no
+    # CFL-type *stability* limit in the linear problem.  But the highest
+    # representable mode advances k_max^2 * dt radians per step, and once
+    # that approaches pi those modes are unresolved in time; coupling
+    # through the nonlinear term then pumps them and the field detonates
+    # after a few tens of time units with the norm still conserved to
+    # round-off (so a norm check will NOT catch it).
+    #
+    # Empirically verified on a 2D vortex pair:
+    #   6.32 rad/step -> blows up near t = 35
+    #   0.79 rad/step -> stable to t = 200, dE/E ~ 1e-8
+    # Hence: warn above WARN, refuse above HARD.
+    PHASE_WARN = 1.0     # rad per step: above this, accuracy degrades
+    PHASE_HARD = 2.0     # rad per step: above this, expect instability
+
+    def max_phase_per_step(self, dt: float) -> float:
+        """k_max^2 * dt: phase advance of the highest grid mode per step."""
+        return float(self.g.k2.max()) * float(dt)
+
+    def suggested_dt(self, phase: float = 0.8) -> float:
+        """Largest dt whose highest-mode phase advance is `phase` radians."""
+        return phase / float(self.g.k2.max())
+
+    def _check_dt(self, dt: float, strict: bool = True) -> None:
+        ph = self.max_phase_per_step(dt)
+        if ph <= self.PHASE_WARN:
+            return
+        msg = (f"dt={dt:g} gives {ph:.2f} rad/step for the highest grid "
+               f"mode (k_max^2*dt). Recommended dt <= "
+               f"{self.suggested_dt():.4g} on this grid.")
+        if ph > self.PHASE_HARD and strict:
+            raise ValueError(
+                "Unstable timestep: " + msg +
+                " Pass strict=False to override deliberately.")
+        warnings.warn("Marginal timestep: " + msg, RuntimeWarning,
+                      stacklevel=3)
+
+    # ------------------------------------------------------------------
+    def step_real(self, dt: float, nsteps: int = 1, strict: bool = True):
+        """Real-time Strang steps (norm-conserving to round-off).
+
+        Raises ValueError when dt is large enough to cause temporal
+        aliasing of the highest grid modes (see the guard above).
+        """
+        self._check_dt(dt, strict=strict)
         halfK = np.exp(-1j * self.g.k2 * dt / 2.0)
         for _ in range(nsteps):
             self.psi = _ifft(halfK * _fft(self.psi))

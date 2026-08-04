@@ -1,6 +1,6 @@
 # Roadmap to publication
 
-Current position: **Step 1 complete** — solver built, 18/18 validation checks
+Current position: **Step 1 complete** — solver built, 23/23 validation checks
 passing, all notebook cells execution-tested.
 
 ## Step 2 — Platform validation (V3–V5)   ~3–5 weeks

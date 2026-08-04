@@ -106,5 +106,35 @@
   "value": "2.53e-09",
   "criterion": "< 1e-4",
   "pass": true
+ },
+ {
+  "name": "T7a guard rejects dt=0.02 on 256^2 grid",
+  "value": "6.32 rad/step, rejected=True",
+  "criterion": "phase > 2 rad and rejected",
+  "pass": true
+ },
+ {
+  "name": "T7b phase advance of guarded dt",
+  "value": "0.790 rad/step",
+  "criterion": "< 1.0",
+  "pass": true
+ },
+ {
+  "name": "T7c energy drift to t=60",
+  "value": "1.26e-08",
+  "criterion": "< 1e-5",
+  "pass": true
+ },
+ {
+  "name": "T7d norm drift to t=60",
+  "value": "5.81e-13",
+  "criterion": "< 1e-10",
+  "pass": true
+ },
+ {
+  "name": "T7e vortex count preserved to t=60",
+  "value": "2",
+  "criterion": "exactly 2",
+  "pass": true
  }
 ]

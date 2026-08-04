@@ -4,7 +4,9 @@
 
 A validated pseudo-spectral solver for the **extended Gross–Pitaevskii equation** (eGPE) with dipolar interactions and Lee–Huang–Yang corrections, built to study vortex-tangle quantum turbulence in dipolar supersolids.
 
-**Status:** 18/18 validation checks passing. All 6 notebook cells verified by execution.
+**Status:** 23/23 validation checks passing. All 6 notebook cells verified by execution at **full length** (no shortened loops).
+
+**v1.1** fixes a temporal-aliasing blow-up in v1.0. See *Bug history* below.
 
 ---
 
@@ -76,7 +78,7 @@ qt/
 git clone https://github.com/vk001king/qt.git
 cd qt
 pip install numpy matplotlib
-python tests/run_validation.py          # expect: 18/18 checks passed
+python tests/run_validation.py          # expect: 23/23 checks passed
 python test_notebook_cells.py           # expect: 6/6 cells executed
 ```
 
@@ -110,7 +112,9 @@ gam = gamma_tilde(1.4, 5e-5)
 solver = EGPESolver(grid, eps_dd=1.4, gamma=gam, Dk=Dk)
 solver.psi = ...                                     # your initial condition
 solver.step_imag(0.005, 4000)                        # relax to ground state
-solver.step_real(0.02, 5000)                         # evolve
+
+print(solver.suggested_dt())                         # largest safe timestep
+solver.step_real(0.01, 10000)                        # evolve (guarded)
 
 run.save_checkpoint(solver.psi, step=5000, t=100.0)
 run.finish('completed')
@@ -140,7 +144,7 @@ with `D` the dipolar convolution (Fourier symbol `3cos²θ_k − 1`), `ε_dd = a
 
 ## Validation
 
-Run `python tests/run_validation.py`. Eighteen checks, all passing:
+Run `python tests/run_validation.py`. Twenty-three checks, all passing:
 
 | Check | Measured | Criterion |
 |---|---|---|
@@ -162,6 +166,37 @@ Run `python tests/run_validation.py`. Eighteen checks, all passing:
 | T6 Helmholtz split | Ei 88.1 > Ec 14.4 | incompressible dominant |
 | T6 norm conservation | 5.8e-14 | < 1e-12 |
 | T6 energy conservation | 2.5e-09 | < 1e-4 |
+| T7a guard rejects unsafe dt | 6.32 rad/step, rejected | phase > 2 and rejected |
+| T7b guarded dt phase advance | 0.790 rad/step | < 1.0 |
+| T7c energy drift to t=60 | 1.26e-08 | < 1e-5 |
+| T7d norm drift to t=60 | 5.8e-13 | < 1e-10 |
+| T7e vortex count to t=60 | 2 | exactly 2 |
+
+## Bug history
+
+**v1.0 -> v1.1: temporal aliasing.** The kinetic substep applies
+`exp(-i k^2 dt)` exactly, so there is no CFL stability limit. But the
+highest grid mode advances `k_max^2 * dt` radians per step, and once that
+approaches pi those modes are unresolved in time; the nonlinear term then
+pumps them until the field detonates. The v1.0 demo used a 256^2 grid with
+`dt = 0.02`, giving **6.3 rad/step**, and diverged near `t = 35`: two
+vortices became 21,000 and the energy grew by a factor of 6000 — all
+**with the norm conserved to 1e-13**, so a norm check does not catch it.
+
+Two things were wrong, and both are fixed:
+
+1. *The solver allowed it.* `step_real` now computes `k_max^2 * dt` and
+   raises `ValueError` above 2 rad/step, warns above 1. `suggested_dt()`
+   returns the largest safe value for any grid.
+2. *The test suite missed it.* The v1.0 notebook harness shortened the
+   demo loop to `t = 12`, never reaching the failure at `t = 35`. The
+   harness now runs every loop at full length, and T7 pins the behaviour
+   down permanently.
+
+**Also corrected in v1.1:** the ground-state cell called a single stripe
+filling the box "supersolid-like" on the basis of density contrast alone.
+It now measures the dominant wavelength as well and reports
+`BOX-SCALE ARTIFACT` unless at least two periods fit inside the box.
 
 Higher validation rungs (comparison against published ¹⁶⁴Dy results, glitch dynamics, turbulence regression) are listed in `ROADMAP.md` as the next work item.
 

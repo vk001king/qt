@@ -214,10 +214,64 @@ def t6_vortex():
     record("T6 |dE|/E over 500 steps", f"{dE:.2e}", "< 1e-4", dE < 1e-4)
 
 
+# ----------------------------------------------------------------- T7
+def t7_long_time_stability():
+    """Regression test for the temporal-aliasing blow-up found in Colab.
+
+    History: a demo run on a 256^2 grid with dt=0.02 gave 6.3 rad/step
+    phase advance for the highest grid mode.  Energy stayed flat to 1e-7
+    until t~30, then exploded (vortex count 2 -> 21000, energy x6000)
+    while the norm remained conserved to 1e-13 -- so norm checks do NOT
+    detect it.  T7 pins down both halves of the fix: the guard must
+    reject the bad timestep, and a guarded timestep must stay stable
+    well past the old failure time.
+    """
+    # (a) the guard rejects the historical failure configuration
+    g_bad = Grid((256, 256), (64.0, 64.0))
+    s_bad = EGPESolver(g_bad)
+    s_bad.psi = np.ones(g_bad.shape, dtype=complex)
+    phase_bad = s_bad.max_phase_per_step(0.02)
+    rejected = False
+    try:
+        s_bad.step_real(0.02, 1)
+    except ValueError:
+        rejected = True
+    record("T7a guard rejects dt=0.02 on 256^2 grid",
+           f"{phase_bad:.2f} rad/step, rejected={rejected}",
+           "phase > 2 rad and rejected", phase_bad > 2.0 and rejected)
+
+    # (b) a guarded timestep survives well past the old blow-up time
+    g = Grid((128, 128), (64.0, 64.0))
+    dx = g.dx[0]
+    dt = 0.01                       # 0.79 rad/step on this grid
+    xp, xm, yc = 8.0 + 0.5 * dx, -8.0 + 0.5 * dx, 0.5 * dx
+    thp = np.arctan2(g.X[1] - yc, g.X[0] - xp)
+    thm = np.arctan2(g.X[1] - yc, g.X[0] - xm)
+    rp = np.sqrt((g.X[0] - xp) ** 2 + (g.X[1] - yc) ** 2)
+    rm = np.sqrt((g.X[0] - xm) ** 2 + (g.X[1] - yc) ** 2)
+    s = EGPESolver(g)
+    s.psi = np.tanh(rp) * np.tanh(rm) * np.exp(1j * (thp - thm))
+    s.step_imag(5e-3, 300, norm_target=s.norm())
+
+    record("T7b phase advance of guarded dt",
+           f"{s.max_phase_per_step(dt):.3f} rad/step", "< 1.0", 
+           s.max_phase_per_step(dt) < 1.0)
+
+    E0, N0 = s.energy()["total"], s.norm()
+    nsteps = int(60.0 / dt)         # t = 60, well past the old t ~ 32 failure
+    s.step_real(dt, nsteps)
+    dE = abs(s.energy()["total"] - E0) / abs(E0)
+    dN = abs(s.norm() - N0) / N0
+    nv = int((plaquette_charges_2d(s.psi) != 0).sum())
+    record("T7c energy drift to t=60", f"{dE:.2e}", "< 1e-5", dE < 1e-5)
+    record("T7d norm drift to t=60", f"{dN:.2e}", "< 1e-10", dN < 1e-10)
+    record("T7e vortex count preserved to t=60", f"{nv}", "exactly 2", nv == 2)
+
+
 if __name__ == "__main__":
     t_start = time.time()
     for t in (t1_plane_wave, t2_order, t3_thomas_fermi, t4_q5,
-              t5_kernels, t6_vortex):
+              t5_kernels, t6_vortex, t7_long_time_stability):
         t()
     npass = sum(1 for *_, p in RESULTS if p)
     print(f"\n== {npass}/{len(RESULTS)} checks passed "

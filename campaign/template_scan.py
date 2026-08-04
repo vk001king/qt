@@ -139,6 +139,12 @@ def main():
     print(f"gamma_tilde = {gamma:.6f}, Q5 = {Q5(args.eps_dd):.6f}")
 
     solver = EGPESolver(grid, eps_dd=args.eps_dd, gamma=gamma, Dk=Dk)
+    ph = solver.max_phase_per_step(args.dt)
+    print(f"timestep check: {ph:.3f} rad/step "
+          f"(safe dt <= {solver.suggested_dt():.4g})")
+    if ph > solver.PHASE_HARD:
+        raise SystemExit(f"dt={args.dt} unsafe on this grid; "
+                         f"use --dt {solver.suggested_dt():.4g} or smaller")
 
     # --- Ground state ---
     print("Finding ground state (imaginary time)...")
