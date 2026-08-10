@@ -1,13 +1,16 @@
 # Roadmap to publication
 
-Current position: **Step 1 complete** — solver built, 23/23 validation checks
+Current position: **Step 1 complete** — solver built, 29/29 validation checks
 passing, all notebook cells execution-tested.
 
 ## Step 2 — Platform validation (V3–V5)   ~3–5 weeks
 - [ ] V3  Code-to-code comparison against published dipolar GPE suites
 - [ ] V4  Reproduce the 164Dy supersolid transition point and lattice constant
 - [ ] V5  Reproduce glitch spin-up phenomenology (Poli et al., PRL 2023)
-- [ ] Implement the quasi-2D projected dipolar kernel (prerequisite for V4)
+- [x] Implement the quasi-2D projected dipolar kernel (done in v1.3,
+      verified to 5e-15, produces a droplet crystal at the roton period)
+- [ ] Resolve why the crystal is not a converged stationary state
+      (residual plateaus at 2e-2, large real-time drift) -- see FLAGS.md
 
 ## Step 3 — Turbulence regression (V6)   ~1 week
 - [ ] eps_dd -> 0, gamma -> 0 must recover Kolmogorov k^-5/3 and Vinen L ~ t^-1

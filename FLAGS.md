@@ -17,6 +17,34 @@
       target.  Expected to be a symptom of the box-scale mode; recheck
       after the quasi-2D kernel lands (V4).
 
+## v1.3 progress on validation rung V4
+- [x] Quasi-2D projected dipolar kernel DERIVED and implemented:
+      D(k) = 2*sqrt(2) - 3*sqrt(2*pi)*u*erfcx(u),  u = k*l_z/2,
+      from integrating g_dd(3k_z^2/k^2 - 1) against the Gaussian axial
+      density and dividing by g_2D = g/(sqrt(2*pi)*l_z).
+      Verified against direct quadrature to 5e-15; both limits exact
+      (D(0)=+2sqrt2 repulsive, D(inf)=-sqrt2 attractive).  The sign
+      change is the roton, absent from the bare kernel.
+- [x] Bogoliubov spectrum and roton locator added.
+- [x] Confirmed a genuine triangular DROPLET CRYSTAL forms, contrast
+      ~19.7, with period matching the roton prediction to 1.8 percent
+      in a commensurate box (7.00 vs 7.12 xi).
+- [ ] **OPEN: the crystal is not a converged stationary state.**
+      Imaginary-time residual plateaus at 2.3e-2 (res/mu 4e-3) and does
+      not improve with 24k further steps at dtau down to 5e-5.  Real-time
+      evolution shows density drift of order the contrast itself
+      (16 relative to mean over t=5), so the configuration is
+      metastable/defected, not the ground state.  Candidate causes to
+      investigate, in order: (i) insufficient annealing -- try a slow
+      eps_dd ramp instead of noise seeding; (ii) l_z = 6 xi sits at the
+      edge of quasi-2D validity, so the frozen-axial-mode assumption may
+      be breaking; (iii) droplet collapse dynamics needing a stronger LHY
+      term or three-body loss; (iv) box aspect ratio still frustrating
+      the triangular lattice despite commensuration.
+- [ ] Only after the above: compare the lattice constant to the published
+      164Dy measurements.  That comparison is the actual content of V4
+      and has NOT been done.
+
 ## Code
 - [ ] Quasi-2D projected dipolar kernel (pancake geometry).  The current 2D
       kernel is the bare periodic symbol: fine for demonstration, but the

@@ -136,5 +136,41 @@
   "value": "2",
   "criterion": "exactly 2",
   "pass": true
+ },
+ {
+  "name": "T8a analytic kernel vs quadrature",
+  "value": "4.99e-15",
+  "criterion": "< 1e-10",
+  "pass": true
+ },
+ {
+  "name": "T8b limits D(0)=2sqrt2, D(inf)=-sqrt2",
+  "value": "2.828427 / -1.414213",
+  "criterion": "2.828427 / -1.414214",
+  "pass": true
+ },
+ {
+  "name": "T8c overflow-safe at k=1e6",
+  "value": "-1.414214",
+  "criterion": "finite, approx -sqrt2",
+  "pass": true
+ },
+ {
+  "name": "T8d kernel changes sign",
+  "value": "max=2.828, min=-1.414",
+  "criterion": "positive at small k, negative at large k",
+  "pass": true
+ },
+ {
+  "name": "T8e roton instability at eps_dd=1.8, l_z=6",
+  "value": "min_inside=-0.6026, a_pred=7.138 xi",
+  "criterion": "min_inside < 0 (unstable)",
+  "pass": true
+ },
+ {
+  "name": "T8f grid symbol consistent, 3D rejected",
+  "value": "maxdiff=0.0e+00, rejected3d=True",
+  "criterion": "match and 3D rejected",
+  "pass": true
  }
 ]

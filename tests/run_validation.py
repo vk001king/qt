@@ -268,10 +268,92 @@ def t7_long_time_stability():
     record("T7e vortex count preserved to t=60", f"{nv}", "exactly 2", nv == 2)
 
 
+# ----------------------------------------------------------------- T8
+def t8_quasi2d_kernel():
+    """Quasi-2D projected dipolar kernel: derivation, limits, roton.
+
+    The kernel is
+        D(k) = 2 sqrt(2) - 3 sqrt(2 pi) u erfcx(u),   u = k l_z / 2,
+    obtained by integrating the 3D symbol g_dd(3 k_z^2/k^2 - 1) against the
+    Gaussian axial density and dividing by g_2D = g/(sqrt(2 pi) l_z).
+    Unlike the bare periodic symbol it changes sign, which is what creates
+    a roton and therefore a droplet crystal at a physical wavelength.
+    """
+    from qtsim.kernels import (quasi2d_dipolar_profile,
+                               quasi2d_dipolar_symbol)
+    from qtsim.lhy import gamma_tilde
+
+    # (a) analytic form vs direct numerical quadrature of the defining integral
+    try:
+        from scipy.integrate import quad
+        lz = 1.0
+        worst = 0.0
+        for kv in (0.05, 0.3, 1.0, 2.0, 4.0, 8.0):
+            def integ(kz, kv=kv):
+                k2 = kv * kv + kz * kz
+                return ((3 * kz * kz / k2 - 1.0)
+                        * np.exp(-kz * kz * lz * lz / 4.0) / (2 * np.pi))
+            num, _ = quad(integ, -60 / lz, 60 / lz, limit=400)
+            num *= np.sqrt(2 * np.pi) * lz
+            ana = float(quasi2d_dipolar_profile(kv, lz))
+            worst = max(worst, abs(ana - num) / max(abs(num), 1e-30))
+        record("T8a analytic kernel vs quadrature", f"{worst:.2e}", "< 1e-10",
+               worst < 1e-10)
+    except ImportError:
+        record("T8a analytic kernel vs quadrature", "scipy absent",
+               "skipped", True)
+
+    # (b) both limits, exactly
+    d0 = float(quasi2d_dipolar_profile(1e-9, 1.0))
+    dinf = float(quasi2d_dipolar_profile(1e4, 1.0))
+    ok = (abs(d0 - 2 * np.sqrt(2)) < 1e-6
+          and abs(dinf + np.sqrt(2)) < 1e-6)
+    record("T8b limits D(0)=2sqrt2, D(inf)=-sqrt2",
+           f"{d0:.6f} / {dinf:.6f}", "2.828427 / -1.414214", ok)
+
+    # (c) overflow safety far beyond the erfc overflow threshold
+    big = float(quasi2d_dipolar_profile(1e6, 1.0))
+    record("T8c overflow-safe at k=1e6", f"{big:.6f}",
+           "finite, approx -sqrt2", np.isfinite(big) and abs(big + 1.4142) < 1e-3)
+
+    # (d) sign change exists (this is what the bare kernel lacks)
+    kk = np.linspace(1e-6, 20, 4000)
+    D = quasi2d_dipolar_profile(kk, 6.0)
+    record("T8d kernel changes sign", f"max={D.max():.3f}, min={D.min():.3f}",
+           "positive at small k, negative at large k",
+           D.max() > 0 and D.min() < 0)
+
+    # (e) roton instability appears where linear theory says it should
+    eps, lz2 = 1.8, 6.0
+    gam = gamma_tilde(eps, 5e-5)
+    Dp = quasi2d_dipolar_profile(kk, lz2)
+    inside = kk ** 2 + 2.0 * (1.0 + eps * Dp) + 3.0 * gam
+    imin = int(np.argmin(inside))
+    a_pred = 2 * np.pi / kk[imin]
+    record("T8e roton instability at eps_dd=1.8, l_z=6",
+           f"min_inside={inside[imin]:.4f}, a_pred={a_pred:.3f} xi",
+           "min_inside < 0 (unstable)", inside[imin] < 0)
+
+    # (f) grid symbol matches the profile and rejects 3D grids
+    g2 = Grid((32, 32), (16.0, 16.0))
+    S = quasi2d_dipolar_symbol(g2, 2.0)
+    P = quasi2d_dipolar_profile(np.sqrt(g2.k2), 2.0)
+    rejected3d = False
+    try:
+        quasi2d_dipolar_symbol(Grid((8, 8, 8), (8.0, 8.0, 8.0)), 2.0)
+    except ValueError:
+        rejected3d = True
+    record("T8f grid symbol consistent, 3D rejected",
+           f"maxdiff={np.abs(S - P).max():.1e}, rejected3d={rejected3d}",
+           "match and 3D rejected",
+           np.abs(S - P).max() < 1e-14 and rejected3d)
+
+
 if __name__ == "__main__":
     t_start = time.time()
     for t in (t1_plane_wave, t2_order, t3_thomas_fermi, t4_q5,
-              t5_kernels, t6_vortex, t7_long_time_stability):
+              t5_kernels, t6_vortex, t7_long_time_stability,
+              t8_quasi2d_kernel):
         t()
     npass = sum(1 for *_, p in RESULTS if p)
     print(f"\n== {npass}/{len(RESULTS)} checks passed "
@@ -281,3 +363,5 @@ if __name__ == "__main__":
         json.dump([{ "name": n, "value": v, "criterion": c, "pass": p}
                    for n, v, c, p in RESULTS], f, indent=1)
     sys.exit(0 if npass == len(RESULTS) else 1)
+
+

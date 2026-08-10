@@ -4,7 +4,7 @@
 
 A validated pseudo-spectral solver for the **extended Gross–Pitaevskii equation** (eGPE) with dipolar interactions and Lee–Huang–Yang corrections, built to study vortex-tangle quantum turbulence in dipolar supersolids.
 
-**Status:** 23/23 validation checks passing. All 6 notebook cells verified by execution at **full length** (no shortened loops).
+**Status:** 29/29 validation checks passing. All 6 notebook cells verified by execution at **full length** (no shortened loops).
 
 **v1.1** fixes a temporal-aliasing blow-up in v1.0. See *Bug history* below.
 
@@ -78,7 +78,7 @@ qt/
 git clone https://github.com/vk001king/qt.git
 cd qt
 pip install numpy matplotlib
-python tests/run_validation.py          # expect: 23/23 checks passed
+python tests/run_validation.py          # expect: 29/29 checks passed
 python test_notebook_cells.py           # expect: 6/6 cells executed
 ```
 
@@ -144,7 +144,7 @@ with `D` the dipolar convolution (Fourier symbol `3cos²θ_k − 1`), `ε_dd = a
 
 ## Validation
 
-Run `python tests/run_validation.py`. Twenty-three checks, all passing:
+Run `python tests/run_validation.py`. Twenty-nine checks, all passing:
 
 | Check | Measured | Criterion |
 |---|---|---|
@@ -219,9 +219,34 @@ Higher validation rungs (comparison against published ¹⁶⁴Dy results, glitch
 
 ---
 
-## Known limitations
+## v1.3: quasi-2D kernel and the droplet crystal
 
-The 2D dipolar kernel here is the bare periodic symbol, adequate for demonstration but not the production quasi-2D projected kernel; the demo ground state is therefore uniform rather than crystalline at the parameters shown. Reproducing the published supersolid lattice constant is validation rung V4. Three-dimensional vortex line tracking and the GPU backend are also outstanding. See `FLAGS.md`.
+The bare periodic dipolar symbol has no roton, which is why earlier
+versions produced only a box-scale stripe. v1.3 adds the **quasi-2D
+projected kernel**, derived by integrating the 3D symbol against the
+Gaussian axial density:
+
+```
+D(k) = 2*sqrt(2) - 3*sqrt(2*pi) * u * erfcx(u),    u = k * l_z / 2
+```
+
+It runs from `+2*sqrt(2)` (repulsive) at `k=0` to `-sqrt(2)` (attractive)
+at large `k`. That sign change is the roton. Verified against direct
+numerical quadrature to **5e-15**, with both limits exact.
+
+With `eps_dd = 1.8`, `l_z = 6 xi` the uniform state is roton-unstable and
+relaxation produces a genuine **triangular droplet crystal**, contrast
+~19.7, whose period agrees with the linear roton prediction to **1.8%**
+(6.995 vs 7.124 xi) in a commensurate box.
+
+**Open problem, stated plainly:** that crystal is *not* a converged
+stationary state. The imaginary-time residual plateaus at 2.3e-2 and
+real-time evolution shows density drift of order the contrast itself, so
+it is metastable or defected rather than the ground state. The notebook
+runs this stationarity check and reports the failure rather than hiding
+it. Until it is resolved, the lattice constant cannot meaningfully be
+compared to published 164Dy measurements — so **validation rung V4 is
+started, not finished.** See `FLAGS.md` for the candidate causes. Three-dimensional vortex line tracking and the GPU backend are also outstanding. See `FLAGS.md`.
 
 ---
 

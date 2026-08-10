@@ -18,6 +18,10 @@ from .kernels import (
     bare_dipolar_symbol,
     truncated_dipolar_symbol,
     truncation_bracket,
+    quasi2d_dipolar_symbol,
+    quasi2d_dipolar_profile,
+    bogoliubov_omega,
+    roton_wavevector,
 )
 from .lhy import Q5, gamma_tilde
 from .solver import EGPESolver
@@ -29,13 +33,17 @@ from .diagnostics import (
 from .drive_io import Archive, Run, ensure_dir, mount_drive
 from . import diagnostics
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 __all__ = [
     "Grid",
     "bare_dipolar_symbol",
     "truncated_dipolar_symbol",
     "truncation_bracket",
+    "quasi2d_dipolar_symbol",
+    "quasi2d_dipolar_profile",
+    "bogoliubov_omega",
+    "roton_wavevector",
     "Q5",
     "gamma_tilde",
     "EGPESolver",
