@@ -219,6 +219,58 @@ Higher validation rungs (comparison against published ¹⁶⁴Dy results, glitch
 
 ---
 
+## v1.8: real experimental parameters, and H1 inverted
+
+Casotti et al., *Nature* **635**, 327 (2024) was read in full including
+Methods. Three corrections followed; see `EXPERIMENTAL_PARAMETERS.md`.
+
+**H1 was backwards.** We hypothesised that interstitial pinning *raises*
+the vortex nucleation threshold in a supersolid. The paper reports the
+opposite in both experiment and its own eGPE: the supersolid nucleates at
+`Omega ~ 0.25-0.45 omega_perp` against `~0.6` for the BEC, because a 2D
+supersolid's near-degenerate **crystal** quadrupole mode opens an extra
+angular-momentum channel. Pinning governs vortex motion and decay, not the
+threshold. H1 must be inverted before any campaign tests it.
+
+**eps_dd = 1.8 was outside the supersolid phase.** Real window is
+`a_s = 90-95 a0` with `a_dd = 130.8 a0`, i.e. `eps_dd = 1.377-1.453`. Our
+1.8 means `a_s = 72.7 a0` -- isolated droplets. At real parameters the roton
+survives but `min(inside)` is only `-0.03` to `-0.19` versus `-0.60` at 1.8,
+and vanishes at higher density: crystal existence is density-sensitive, which
+the wrong value hid entirely. Defaults are now `eps_dd = 1.414`, `l_z/xi = 8.6`.
+
+**Confirmed:** our `Q5` and LHY prefactor are algebraically identical to
+theirs, and the `Re{}` convention for `eps_dd > 1` is now sourced -- that
+flag is closed. Our v1.7 vortex-count systematic is independently
+corroborated: they mask to a 6 um circle and state that varying their
+detection threshold changes absolute counts but not qualitative results.
+
+## v1.8: real experimental parameters, and H1 inverted
+
+Casotti et al., *Nature* **635**, 327 (2024) was read in full including
+Methods. Three corrections followed; see `EXPERIMENTAL_PARAMETERS.md`.
+
+**H1 was backwards.** We hypothesised that interstitial pinning *raises*
+the vortex nucleation threshold in a supersolid. The paper reports the
+opposite in both experiment and its own eGPE: the supersolid nucleates at
+`Omega ~ 0.25-0.45 omega_perp` against `~0.6` for the BEC, because a 2D
+supersolid's near-degenerate **crystal** quadrupole mode opens an extra
+angular-momentum channel. Pinning governs vortex motion and decay, not the
+threshold. H1 must be inverted before any campaign tests it.
+
+**eps_dd = 1.8 was outside the supersolid phase.** Real window is
+`a_s = 90-95 a0` with `a_dd = 130.8 a0`, i.e. `eps_dd = 1.377-1.453`. Our
+1.8 means `a_s = 72.7 a0` -- isolated droplets. At real parameters the roton
+survives but `min(inside)` is only `-0.03` to `-0.19` versus `-0.60` at 1.8,
+and vanishes at higher density: crystal existence is density-sensitive, which
+the wrong value hid entirely. Defaults are now `eps_dd = 1.414`, `l_z/xi = 8.6`.
+
+**Confirmed:** our `Q5` and LHY prefactor are algebraically identical to
+theirs, and the `Re{}` convention for `eps_dd > 1` is now sourced -- that
+flag is closed. Our v1.7 vortex-count systematic is independently
+corroborated: they mask to a 6 um circle and state that varying their
+detection threshold changes absolute counts but not qualitative results.
+
 ## v1.7: vortex counting in a droplet crystal
 
 The inter-droplet regions of a crystal are near-vacuum (`n_min ~ 1e-6

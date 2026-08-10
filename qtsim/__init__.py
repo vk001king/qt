@@ -36,7 +36,7 @@ from .drive_io import (Archive, Run, ensure_dir, mount_drive,
 from . import diagnostics
 from . import minimize
 
-__version__ = "1.7.0"
+__version__ = "1.9.0"
 
 __all__ = [
     "Grid",

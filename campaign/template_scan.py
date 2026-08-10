@@ -30,15 +30,15 @@ from qtsim.diagnostics import (plaquette_charges_2d,
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--eps_dd", type=float, default=1.3,
-                   help="Dipolar interaction anisotropy")
+    p.add_argument("--eps_dd", type=float, default=1.414,
+                   help="Dipolar anisotropy a_dd/a_s. Experimental supersolid\n                        window is 1.377-1.453 (a_s=90-95 a0,\n                        a_dd=130.8 a0) per Casotti Nature 2024.")
     p.add_argument("--Ma", type=float, default=1.1,
                    help="Stirring Mach number U/c0")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--N", type=int, default=256, help="Grid points per side")
     p.add_argument("--L", type=float, default=128.0, help="Box size (xi)")
-    p.add_argument("--n0_as3", type=float, default=5e-5,
-                   help="Gas parameter n0*a_s^3")
+    p.add_argument("--n0_as3", type=float, default=1.17e-4,
+                   help="Gas parameter n0*a_s^3. 1.17e-4 corresponds to\n                        a_s=92.5 a0 at n0=1e21 m^-3.")
     p.add_argument("--dt", type=float, default=0.01,
                    help="Time step (tau units)")
     p.add_argument("--T_relax", type=float, default=200.0,
@@ -57,8 +57,8 @@ def parse_args():
                         "with a roton, required for supersolid physics; "
                         "'bare' has no roton and gives only a box-scale "
                         "mode (regression use only).")
-    p.add_argument("--l_z", type=float, default=6.0,
-                   help="Axial confinement length in xi (quasi2d kernel)")
+    p.add_argument("--l_z", type=float, default=8.6,
+                   help="Axial confinement length in xi. Real trap\n                        (omega_z=2pi x 103 Hz) with n0~1e21 m^-3\n                        gives l_z/xi ~ 8.6; range 6-19 over\n                        plausible densities.")
     p.add_argument("--V0_factor", type=float, default=3.0,
                    help="Obstacle height in units of mu (need >~1 to shed)")
     p.add_argument("--n_stir", type=int, default=3,

@@ -114,6 +114,72 @@
 - [x] `test_notebook_cells.py` docstring still claimed loops were
       shortened; false since v1.2 and corrected.
 
+## v1.9: SECOND SOURCE READ -- PINNING PICTURE IS WRONG
+Alaña, Modugno, Capuzzi, Jezek, arXiv:2405.05099 (2024), read in full.
+
+- [ ] **THE PINNING NUMBER Pi MAY BE THE WRONG CONTROL PARAMETER.**
+      Phase 5B built Pi = Delta_E_pin/E_l on the assumption that vortices
+      sit in density minima behind an energy barrier.  For a ROTATING
+      supersolid this paper finds vortices are NOT preferentially at
+      density minima or saddles; their positions vary smoothly with drive
+      frequency and are set by the RELATIVE PHASES of neighbouring
+      droplets, not the density landscape.  Their model gives
+      Y_v = (phi/pi + 2l + 1) pi hbar/(m d Omega).
+      Consequences: the friction closure alpha_eff (H3) must be re-derived
+      with the phase-gradient mechanism; H4's unpinning avalanches may have
+      no barrier to avalanche over in the rotating case.  Whether a STIRRED
+      TURBULENT state behaves like their STATIONARY rotating one is
+      untested and is now the sharpest open question in the project.
+- [x] CONFIRMED a = 2*lambda/sqrt(3) -- they state d = 2 lambda/sqrt(3)
+      for the triangular lattice, identical to our v1.6 derivation.
+- [x] CONFIRMED H1 inversion by a SECOND independent source: low-density
+      valleys "reduce the energetic barrier for a vortex to enter the
+      system, which lowers the nucleation frequency".
+- [x] CONFIRMED multi-start is necessary: their note [56] says conjugate
+      gradient on the eGPE "inherently yields local minima" and different
+      trial wavefunctions give "nearly degenerate" lattice geometries.
+      Exactly the v1.5 diagnosis and v1.6 fix, independently corroborated.
+- [x] Plaquette method sourced: Foster, Blakie, Davis, PRA 81, 023623
+      (2010), cited by them for the same purpose.
+- [ ] TWO LHY CONVENTIONS in the literature: exact Re{Q5} (Casotti) versus
+      closed form (1 + 3 eps_dd^2/2) (Alaña).  The closed form is 5 percent
+      LOW across the experimental window (measured).  We use the exact
+      integral; this must be stated since 5 percent in gamma shifts the
+      already-thin roton margin.
+
+## v1.8: LITERATURE READ, THREE CORRECTIONS
+See EXPERIMENTAL_PARAMETERS.md for the full extraction and citations.
+Casotti et al., Nature 635, 327 (2024) was read in full (Methods included),
+not abstract-only as in Phase 1.
+
+- [ ] **H1 IS BACKWARDS AND MUST BE INVERTED.**  We hypothesised that the
+      supersolid tangle threshold is RAISED by interstitial pinning.  The
+      paper reports, in both experiment and its own eGPE, that the
+      supersolid nucleates vortices at SIGNIFICANTLY LOWER rotation than
+      the BEC (Omega*_SSP ~ 0.25-0.45 vs Omega*_BEC ~ 0.6 omega_perp),
+      because the near-degenerate CRYSTAL quadrupole mode opens an extra
+      angular-momentum channel.  Pinning governs vortex motion and decay
+      (H3-H5), not the nucleation threshold.  The article design needs
+      revising before any campaign is run against H1.
+- [x] eps_dd = 1.8 used in every crystal run is OUTSIDE the experimental
+      supersolid window.  Real: a_s = 90-95 a0 with a_dd = 130.8 a0, i.e.
+      eps_dd = 1.377-1.453.  Our 1.8 means a_s = 72.7 a0 -- the isolated
+      droplet regime.  Recomputed at real values the roton survives but
+      min(inside) is only -0.03 to -0.19 (vs -0.60 at 1.8) and vanishes
+      at higher density: crystal existence is density-sensitive, which
+      eps_dd = 1.8 hid completely.
+- [x] l_z = 6 xi was chosen by scanning, not derived.  Real trap plus
+      plausible densities give l_z/xi ~ 6-19, so 6 is inside the range but
+      only by luck; l_z/xi must be quoted with the density it assumes.
+- [x] **Q5 CONVENTION FLAG CLOSED.**  The paper states
+      Q_n(x) = int_0^1 (1-x+3xu^2)^{n/2} du with Re{} for x>1, and
+      gamma_QF = (128 hbar^2/3m) sqrt(pi a_s^5) Re{Q5}.  Both are
+      algebraically identical to our implementation.  Now sourced.
+- [x] Our v1.7 vortex-count systematic is INDEPENDENTLY CONFIRMED: they
+      mask to a 6 um circle and state that varying their threshold changes
+      absolute counts but not qualitative results.  Report L as trends
+      with a quoted systematic, never as a single absolute number.
+
 ## Fixed in v1.7 (vortex counting in a crystal)
 - [x] The raw plaquette detector invents vortices in the near-vacuum
       inter-droplet regions of a crystal, where the phase is numerical
