@@ -114,6 +114,44 @@
 - [x] `test_notebook_cells.py` docstring still claimed loops were
       shortened; false since v1.2 and corrected.
 
+## v2.1: REAL PARAMETERS FIXED THE METASTABILITY; TWO BOX/LOGIC BUGS
+Running cell 4 at the real experimental parameters produced the single most
+consequential result so far, plus exposed two of our own bugs.
+
+- [x] **THE METASTABILITY WAS LARGELY AN ARTEFACT OF eps_dd = 1.8.**
+      At real parameters (eps_dd = 1.414, l_z = 8.6 xi) the crystal is
+      CONVERGED and STATIONARY: residual 4.75e-06 (res/mu 9.1e-07, versus
+      4.7e-03 before), energy drift 6.8e-13, Bragg amplitude change 7.0e-06,
+      crystal slide exactly 0.00, contrast change 8.9e-07.
+      Interpretation: eps_dd = 1.8 sits deep in the isolated-droplet regime
+      where droplets are nearly independent and their arrangements nearly
+      degenerate -- hence the rugged landscape.  At real supersolid
+      parameters (contrast ~5, droplets still connected) the landscape is
+      far better behaved.  So the v1.5-v1.7 investigation diagnosed a real
+      effect but at unphysical parameters, and over-weighted it.  Multi-start
+      still helps (lattice seed 5.2428 vs noise 5.264-5.272) but the margin
+      is now 0.5 percent, not decisive.
+- [x] **BOX-CONSTRUCTION BUG.**  The commensurate box used
+      Lx = nx * (2*pi/k_rot), but 2*pi/k_rot is the modulation WAVELENGTH,
+      not the droplet spacing d = 2*lambda/sqrt(3).  The in-row spacing was
+      therefore too small by sqrt(3)/2 = 0.866, the crystal adopted the
+      spacing the box allowed, and this manufactured a spurious 13.4 percent
+      'period error'.  The measured/predicted ratio was exactly 0.866023 vs
+      sqrt(3)/2 = 0.866025 -- six-digit confirmation.  Fixed: box now uses
+      d_pred.  Period agreement went 13.4% -> 1.5%.
+      Note Ly correctly used the sqrt(3)/2 row factor, so only the in-row
+      spacing was wrong -- a partial error, easy to miss.
+- [x] **VERDICT LOGIC BUG.**  The chain fell through to 'NO CRYSTAL at these
+      parameters' whenever err >= 10%, so a converged stationary crystal with
+      contrast 4.95 was reported as NO CRYSTAL while the diagnosis line said
+      STATIONARY -- a flat self-contradiction in the output.  Crystal
+      EXISTENCE and period ACCURACY are now reported as separate facts.
+- [ ] **THE 1.5 PERCENT AGREEMENT IS PARTLY CIRCULAR.**  The box is built
+      commensurate with the roton-predicted spacing, so the crystal cannot
+      freely choose its period.  A non-circular test requires an
+      incommensurate or much larger box in which several periods compete.
+      This must be done before the agreement is claimed as validation.
+
 ## v2.0: PHASE 4 REDESIGNED (see PHASE4_REVISED.md)
 The gap G1 survives intact and is now asserted by the primary source
 itself.  What was falsified was the MECHANISM, and the hypotheses have been
