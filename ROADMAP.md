@@ -11,6 +11,25 @@ parameter.  PHASE4_REVISED.md rebuilds the design.  Remaining:
 - [ ] Obtain a measured droplet spacing to close V4
 - [ ] Implement Track B trapped few-droplet geometry
 
+## Step 1.75 — TRACK A: the H4' scan (READY TO RUN)   ~2-4 weeks
+`campaign/track_a_scan.py` implements the frustration-crossover experiment
+that decides contradiction C8.  Verified to bracket R = ell/d = 1:
+drives 0.2 -> 1.6 give R from 4.65 down to 0.46 (cells=5).
+
+    python campaign/track_a_scan.py --quick     # smoke test, ~1 min
+    python campaign/track_a_scan.py             # full scan, 8 drives x 3 seeds
+
+Resumable: completed parameter points are skipped, so a Colab disconnect
+costs only the run in progress.  Every run records raw AND masked vortex
+counts, avalanche statistics at three detection thresholds, and energy/norm
+drift as a health check.  Rows flagged not-conservative must be discarded.
+
+- [ ] Run the full scan at cells=5, then repeat at cells=8 for finite-size
+      scaling (the avalanche exponents are meaningless without it)
+- [ ] Decide C8 from the event-count-versus-R trend
+- [ ] Test an INCOMMENSURATE box: the 1.5% period agreement is currently
+      partly circular because the box imposes the roton spacing
+
 ## Step 2 — Platform validation (V3–V5)   ~3–5 weeks
 - [ ] V3  Code-to-code comparison against published dipolar GPE suites
 - [ ] V4  Reproduce the 164Dy supersolid transition point and lattice constant
