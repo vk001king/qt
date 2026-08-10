@@ -23,7 +23,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from qtsim import (Grid, EGPESolver, bare_dipolar_symbol,
                    quasi2d_dipolar_symbol, quasi2d_dipolar_profile)
 from qtsim.lhy import gamma_tilde, Q5
-from qtsim.diagnostics import plaquette_charges_2d, helmholtz_split_2d
+from qtsim.diagnostics import (plaquette_charges_2d,
+                               plaquette_charges_2d_masked,
+                               helmholtz_split_2d)
 
 
 def parse_args():
@@ -114,9 +116,17 @@ def collect_diagnostics(solver, grid, t):
     """Snapshot of all observables needed for Figs. 1–5."""
     n = np.abs(solver.psi) ** 2
     E = solver.energy()
+    # Report BOTH the raw and the annulus-masked count.  In a droplet
+    # crystal the inter-droplet voids are near-vacuum and the raw detector
+    # finds spurious windings there; masking changes L by 20-50 percent,
+    # which is a systematic that must be quoted, not hidden.
     q = plaquette_charges_2d(solver.psi)
     nv_plus = int((q == 1).sum())
     nv_minus = int((q == -1).sum())
+    qm, mstat = plaquette_charges_2d_masked(solver.psi, grid,
+                                           return_stats=True)
+    nv_plus_m = int((qm == 1).sum())
+    nv_minus_m = int((qm == -1).sum())
     Ei, Ec, Etot = helmholtz_split_2d(solver.psi, grid)
     return {
         "t": float(t),
@@ -131,6 +141,10 @@ def collect_diagnostics(solver, grid, t):
         "n_vortex_plus": nv_plus,
         "n_vortex_minus": nv_minus,
         "n_vortex_total": nv_plus + nv_minus,
+        "n_vortex_plus_masked": nv_plus_m,
+        "n_vortex_minus_masked": nv_minus_m,
+        "n_vortex_total_masked": nv_plus_m + nv_minus_m,
+        "vortex_mask_reject_fraction": mstat["reject_fraction"],
         "n_max": float(n.max()),
         "n_min": float(n.min()),
     }
@@ -239,7 +253,9 @@ def main():
         if step % args.checkpoint_every == 0:
             d = collect_diagnostics(solver, grid, t)
             diagnostics_log.append(d)
-            print(f"  step {step}, t={t:.1f}, n_vortex={d['n_vortex_total']}, "
+            print(f"  step {step}, t={t:.1f}, "
+                  f"n_vortex={d['n_vortex_total']}"
+                  f"(masked {d['n_vortex_total_masked']}), "
                   f"E_i={d['E_incomp']:.3f}, E_c={d['E_comp']:.3f}")
             if run is not None:
                 run.save_checkpoint(solver.psi, step, t, verbose=False)
@@ -259,7 +275,9 @@ def main():
         if step % args.checkpoint_every == 0:
             d = collect_diagnostics(solver, grid, t)
             diagnostics_log.append(d)
-            print(f"  step {step}, t={t:.1f}, n_vortex={d['n_vortex_total']}, "
+            print(f"  step {step}, t={t:.1f}, "
+                  f"n_vortex={d['n_vortex_total']}"
+                  f"(masked {d['n_vortex_total_masked']}), "
                   f"E_i={d['E_incomp']:.3f}, E_c={d['E_comp']:.3f}")
             if run is not None:
                 run.save_checkpoint(solver.psi, step, t, verbose=False)

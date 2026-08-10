@@ -483,12 +483,71 @@ def t10_minimizer():
            "success True", info["success"])
 
 
+# ---------------------------------------------------------------- T11
+def t11_vortex_detection_in_voids():
+    """Vortex detection must not invent vortices in near-vacuum regions.
+
+    In a droplet crystal the inter-droplet regions reach n ~ 1e-6 n_mean,
+    where the phase is numerical noise and the raw plaquette detector finds
+    random windings.  A plain density mask is wrong because a real vortex
+    core also has n -> 0 at its centre; the discriminator is the density in
+    an ANNULUS around the candidate.
+
+    Measured systematic on a stirred crystal: 874 raw, 724 annulus-masked,
+    459 with a crude corner mask -- so L carries a 20-50 percent
+    method-dependent systematic that must be quoted, not hidden.
+    """
+    from qtsim.diagnostics import plaquette_charges_2d_masked
+
+    g = Grid((128, 128), (64.0, 64.0))
+    dx = g.dx[0]
+    rng = np.random.default_rng(0)
+
+    # left half real fluid with one true vortex; right half noisy vacuum
+    amp = np.ones(g.shape)
+    amp[g.X[0] > 0] = 1e-3
+    th = np.arctan2(g.X[1] - 0.5 * dx, g.X[0] + 16 + 0.5 * dx)
+    r = np.sqrt((g.X[0] + 16 + 0.5 * dx) ** 2 + (g.X[1] - 0.5 * dx) ** 2)
+    ph = th.copy()
+    ph[g.X[0] > 0] = 2 * np.pi * rng.random(g.shape)[g.X[0] > 0]
+    psi = (amp * np.tanh(r) * np.exp(1j * ph)).astype(complex)
+
+    inL, inR = (g.X[0] < -2), (g.X[0] > 2)
+    raw = plaquette_charges_2d(psi)
+    qm = plaquette_charges_2d_masked(psi, g)
+
+    raw_void = int((raw[inR] != 0).sum())
+    kept_void = int((qm[inR] != 0).sum())
+    rej = 1.0 - kept_void / max(raw_void, 1)
+    record("T11a rejects void false positives",
+           f"{raw_void} -> {kept_void} ({rej*100:.1f}% rejected)",
+           "> 95% rejected", rej > 0.95)
+
+    kept_real = int((qm[inL] == 1).sum())
+    record("T11b keeps the real vortex", f"{kept_real}", "== 1",
+           kept_real == 1)
+
+    # the mask must be a no-op on a clean uniform-background pair
+    s = EGPESolver(g)
+    xp, xm, yc = 8 + 0.5 * dx, -8 + 0.5 * dx, 0.5 * dx
+    thp = np.arctan2(g.X[1] - yc, g.X[0] - xp)
+    thm = np.arctan2(g.X[1] - yc, g.X[0] - xm)
+    rp = np.sqrt((g.X[0] - xp) ** 2 + (g.X[1] - yc) ** 2)
+    rm = np.sqrt((g.X[0] - xm) ** 2 + (g.X[1] - yc) ** 2)
+    s.psi = np.tanh(rp) * np.tanh(rm) * np.exp(1j * (thp - thm))
+    s.step_imag(5e-3, 300, norm_target=s.norm())
+    q_raw = int((plaquette_charges_2d(s.psi) != 0).sum())
+    q_msk = int((plaquette_charges_2d_masked(s.psi, g) != 0).sum())
+    record("T11c no-op on a clean vortex pair", f"raw={q_raw}, masked={q_msk}",
+           "both == 2", q_raw == 2 and q_msk == 2)
+
+
 if __name__ == "__main__":
     t_start = time.time()
     for t in (t1_plane_wave, t2_order, t3_thomas_fermi, t4_q5,
               t5_kernels, t6_vortex, t7_long_time_stability,
               t8_quasi2d_kernel, t9_conservation_laws,
-              t10_minimizer):
+              t10_minimizer, t11_vortex_detection_in_voids):
         t()
     npass = sum(1 for *_, p in RESULTS if p)
     print(f"\n== {npass}/{len(RESULTS)} checks passed "
@@ -498,6 +557,8 @@ if __name__ == "__main__":
         json.dump([{ "name": n, "value": v, "criterion": c, "pass": p}
                    for n, v, c, p in RESULTS], f, indent=1)
     sys.exit(0 if npass == len(RESULTS) else 1)
+
+
 
 
 

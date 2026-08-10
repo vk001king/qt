@@ -27,6 +27,7 @@ from .lhy import Q5, gamma_tilde
 from .solver import EGPESolver
 from .diagnostics import (
     plaquette_charges_2d,
+    plaquette_charges_2d_masked,
     circulation_loop_2d,
     helmholtz_split_2d,
 )
@@ -35,7 +36,7 @@ from .drive_io import (Archive, Run, ensure_dir, mount_drive,
 from . import diagnostics
 from . import minimize
 
-__version__ = "1.6.1"
+__version__ = "1.7.0"
 
 __all__ = [
     "Grid",
@@ -50,6 +51,7 @@ __all__ = [
     "gamma_tilde",
     "EGPESolver",
     "plaquette_charges_2d",
+    "plaquette_charges_2d_masked",
     "circulation_loop_2d",
     "helmholtz_split_2d",
     "Archive",

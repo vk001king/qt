@@ -114,6 +114,26 @@
 - [x] `test_notebook_cells.py` docstring still claimed loops were
       shortened; false since v1.2 and corrected.
 
+## Fixed in v1.7 (vortex counting in a crystal)
+- [x] The raw plaquette detector invents vortices in the near-vacuum
+      inter-droplet regions of a crystal, where the phase is numerical
+      noise (measured n_min ~ 1e-6 n_mean).  `plaquette_charges_2d_masked`
+      adds an ANNULUS density criterion -- a plain density mask is wrong
+      because a real vortex core also has n -> 0 at its centre.
+      Validated on a fluid/void control: 97.4 percent of void false
+      positives rejected, real vortex kept, no-op on a clean pair (T11).
+- [ ] **REPORT THIS AS A SYSTEMATIC.**  On a stirred quasi-2D crystal the
+      count was 874 raw, 724 annulus-masked (-17 percent), 459 with a crude
+      corner mask (-47 percent).  So vortex line density L in a droplet
+      crystal carries a METHOD-DEPENDENT SYSTEMATIC of order 20-50 percent.
+      L is the primary observable for the threshold (H1), the friction
+      budget (H3), the avalanche statistics (H4) and the decay laws (H5),
+      so every reported L must carry this systematic.  The campaign now
+      records raw AND masked counts plus the reject fraction so the
+      systematic is measurable per run rather than assumed.
+      The residual 2.6 percent of false positives sit on the fluid/void
+      interface and no parameter choice removes them.
+
 ## Code
 - [ ] Quasi-2D projected dipolar kernel (pancake geometry).  The current 2D
       kernel is the bare periodic symbol: fine for demonstration, but the

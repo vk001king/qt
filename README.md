@@ -4,7 +4,7 @@
 
 A validated pseudo-spectral solver for the **extended Gross–Pitaevskii equation** (eGPE) with dipolar interactions and Lee–Huang–Yang corrections, built to study vortex-tangle quantum turbulence in dipolar supersolids.
 
-**Status:** 38/38 validation checks passing. All 6 notebook cells verified by execution at **full length** (no shortened loops).
+**Status:** 41/41 validation checks passing. All 6 notebook cells verified by execution at **full length** (no shortened loops).
 
 **v1.1** fixes a temporal-aliasing blow-up in v1.0. See *Bug history* below.
 
@@ -78,7 +78,7 @@ qt/
 git clone https://github.com/vk001king/qt.git
 cd qt
 pip install numpy matplotlib
-python tests/run_validation.py          # expect: 38/38 checks passed
+python tests/run_validation.py          # expect: 41/41 checks passed
 python test_notebook_cells.py           # expect: 6/6 cells executed
 ```
 
@@ -144,7 +144,7 @@ with `D` the dipolar convolution (Fourier symbol `3cos²θ_k − 1`), `ε_dd = a
 
 ## Validation
 
-Run `python tests/run_validation.py`. Thirty-eight checks, all passing:
+Run `python tests/run_validation.py`. Forty-one checks, all passing:
 
 | Check | Measured | Criterion |
 |---|---|---|
@@ -218,6 +218,32 @@ projected kernel gives a physical modulation wavelength (rung V4).
 Higher validation rungs (comparison against published ¹⁶⁴Dy results, glitch dynamics, turbulence regression) are listed in `ROADMAP.md` as the next work item.
 
 ---
+
+## v1.7: vortex counting in a droplet crystal
+
+The inter-droplet regions of a crystal are near-vacuum (`n_min ~ 1e-6
+n_mean`), the phase there is numerical noise, and the raw plaquette
+detector finds random windings in it. A plain density mask is the wrong fix
+because a real vortex core also has `n -> 0` at its centre, so
+`plaquette_charges_2d_masked` applies an **annulus** density criterion
+instead. Validated on a fluid/void control: 97.4% of void false positives
+rejected, the real vortex kept, and a no-op on a clean pair.
+
+**This is a systematic you must quote.** On a stirred quasi-2D crystal:
+
+| method | count |
+|---|---|
+| raw plaquette | 874 |
+| annulus mask (default) | 724 (−17%) |
+| crude corner mask | 459 (−47%) |
+
+Vortex line density in a droplet crystal therefore carries a
+**method-dependent systematic of order 20–50%**. `L` is the primary
+observable for the threshold, friction, avalanche and decay analyses, so
+every reported `L` must carry it. The campaign now records raw and masked
+counts plus the reject fraction, so the systematic is measured per run.
+The residual 2.6% of false positives sit on the fluid/void interface, where
+the classification is genuinely ambiguous; no parameter choice removes them.
 
 ## v1.6: direct energy minimisation
 

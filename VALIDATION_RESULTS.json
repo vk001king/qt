@@ -226,5 +226,23 @@
   "value": "nit=93, success=True",
   "criterion": "success True",
   "pass": true
+ },
+ {
+  "name": "T11a rejects void false positives",
+  "value": "2520 -> 65 (97.4% rejected)",
+  "criterion": "> 95% rejected",
+  "pass": true
+ },
+ {
+  "name": "T11b keeps the real vortex",
+  "value": "1",
+  "criterion": "== 1",
+  "pass": true
+ },
+ {
+  "name": "T11c no-op on a clean vortex pair",
+  "value": "raw=2, masked=2",
+  "criterion": "both == 2",
+  "pass": true
  }
 ]
