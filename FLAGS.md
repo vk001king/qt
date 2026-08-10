@@ -114,6 +114,30 @@
 - [x] `test_notebook_cells.py` docstring still claimed loops were
       shortened; false since v1.2 and corrected.
 
+## v2.0: PHASE 4 REDESIGNED (see PHASE4_REVISED.md)
+The gap G1 survives intact and is now asserted by the primary source
+itself.  What was falsified was the MECHANISM, and the hypotheses have been
+rebuilt rather than merely flagged:
+- H1 inverted, with the two mechanisms the sources give (reduced
+  interstitial nucleation barrier; crystal quadrupole channel).  Partly a
+  reproduction target now.
+- H2 intact, but the roton and lattice scales are NOT independent
+  (a = 2 lambda/sqrt(3), lambda = 2 pi/k_rot): one crystalline length.
+- H3 reformulated: friction ansatz retained as phenomenology, but its
+  ORIGIN is now an open choice between phase-gradient and density-barrier
+  coupling, separable by measuring alpha_eff against f_s versus contrast.
+  Pi DEMOTED from control parameter to diagnostic.
+- H4 sharpened into the flagship claim, and a NEW contradiction C8 named:
+  Alaña (smooth, no barrier, few vortices) versus Poli (glitches from
+  unpinning) describe incompatible physics.  Hypothesis: geometric
+  frustration at ell < a_L, when vortices outnumber interstitial sites,
+  restores barrier dynamics.  Either outcome resolves C8.
+- Geometry DECIDED: two tracks, Track A periodic extended lattice for
+  statistics, Track B trapped few-droplet matching the experiments for
+  V4/V5 and experimental contact.  Claims labelled by track.
+- [ ] NOVELTY CHECK STILL OWED on the revised question (C8 / frustration
+      crossover).  The original check tested a different question.
+
 ## v1.9: SECOND SOURCE READ -- PINNING PICTURE IS WRONG
 Alaña, Modugno, Capuzzi, Jezek, arXiv:2405.05099 (2024), read in full.
 

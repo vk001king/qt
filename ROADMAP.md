@@ -3,6 +3,14 @@
 Current position: **Step 1 complete** — solver built, 38/38 validation checks
 passing, all notebook cells execution-tested.
 
+## Step 1.5 — DESIGN REPAIR (new, blocking)   ~1-2 weeks
+The literature reading invalidated two hypotheses and the pinning control
+parameter.  PHASE4_REVISED.md rebuilds the design.  Remaining:
+- [ ] Novelty check on the REVISED question (C8 / frustration crossover)
+- [ ] Obtain Poli et al. PRL 131, 223401 full text (other half of C8)
+- [ ] Obtain a measured droplet spacing to close V4
+- [ ] Implement Track B trapped few-droplet geometry
+
 ## Step 2 — Platform validation (V3–V5)   ~3–5 weeks
 - [ ] V3  Code-to-code comparison against published dipolar GPE suites
 - [ ] V4  Reproduce the 164Dy supersolid transition point and lattice constant
