@@ -30,10 +30,11 @@ from .diagnostics import (
     circulation_loop_2d,
     helmholtz_split_2d,
 )
-from .drive_io import Archive, Run, ensure_dir, mount_drive
+from .drive_io import (Archive, Run, ensure_dir, mount_drive,
+                       rescue_ephemeral)
 from . import diagnostics
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 __all__ = [
     "Grid",
@@ -54,6 +55,7 @@ __all__ = [
     "Run",
     "ensure_dir",
     "mount_drive",
+    "rescue_ephemeral",
     "diagnostics",
     "selfcheck",
 ]

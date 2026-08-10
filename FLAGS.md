@@ -17,6 +17,20 @@
       target.  Expected to be a symptom of the box-scale mode; recheck
       after the quasi-2D kernel lands (V4).
 
+## Fixed in v1.4 (data-loss bug)
+- [x] `mount_drive` silently fell back to ./drive_local when the Drive
+      mount failed or the popup was not approved.  A full Colab session
+      (validation + vortex pair + a 200 s crystal relaxation) was written
+      to ephemeral disk and would have been destroyed on disconnect, with
+      no warning in the output.  Mount failure inside Colab now RAISES
+      by default (`require_drive=True`); the fallback must be requested
+      explicitly.
+- [x] Notebook cell 1 asserts `archive.persistent` before any simulation
+      runs, so a non-persistent archive stops the notebook immediately.
+- [x] Notebook cell 6 printed a hardcoded 'Drive location: MyDrive/...'
+      even when output had gone to ephemeral disk -- it now prints the
+      real path and the persistence flag.
+
 ## v1.3 progress on validation rung V4
 - [x] Quasi-2D projected dipolar kernel DERIVED and implemented:
       D(k) = 2*sqrt(2) - 3*sqrt(2*pi)*u*erfcx(u),  u = k*l_z/2,

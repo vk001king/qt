@@ -219,6 +219,14 @@ Higher validation rungs (comparison against published ¹⁶⁴Dy results, glitch
 
 ---
 
+## v1.4: Drive persistence is now enforced
+
+Earlier versions fell back to Colab's ephemeral disk without complaint if
+the Drive mount failed, so a whole session's output could be lost silently.
+Mount failure inside Colab now raises, the notebook asserts persistence
+before running anything, and the archive prints its real path rather than
+an assumed one.
+
 ## v1.3: quasi-2D kernel and the droplet crystal
 
 The bare periodic dipolar symbol has no roton, which is why earlier

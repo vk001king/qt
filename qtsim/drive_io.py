@@ -68,25 +68,66 @@ def ensure_dir(path: str, verbose: bool = True) -> str:
     return path
 
 
-def mount_drive(verbose: bool = True) -> str:
-    """Mount Google Drive when running in Colab; fall back to local disk.
+def mount_drive(verbose: bool = True, require: bool = True) -> str:
+    """Mount Google Drive when running in Colab.
 
-    Returns the root under which the Research tree will be built.
+    Parameters
+    ----------
+    require : if True (default) and we ARE in Colab but the mount fails,
+        raise instead of silently writing to ephemeral disk.  A silent
+        fallback here caused a real data loss: a 200 s run was written to
+        /content/drive_local and would have been destroyed when the
+        session ended, with nothing in the output to indicate it.
+
+    Outside Colab (local machine, CI) a local ./drive_local root is used,
+    which is correct and is stated plainly.
     """
+    in_colab = False
     try:
-        from google.colab import drive  # type: ignore
-        if not os.path.isdir("/content/drive/MyDrive"):
-            drive.mount("/content/drive")
-        else:
+        import google.colab  # noqa: F401
+        in_colab = True
+    except ImportError:
+        pass
+
+    if in_colab:
+        if os.path.isdir("/content/drive/MyDrive"):
             if verbose:
                 print("  [exists ] Google Drive already mounted")
-        return "/content/drive/MyDrive"
-    except Exception:
-        root = os.path.abspath("./drive_local")
+            return "/content/drive/MyDrive"
+        try:
+            from google.colab import drive
+            drive.mount("/content/drive")
+        except Exception as exc:                       # mount refused/failed
+            msg = ("Google Drive did NOT mount (%s).\n"
+                   "    Results would go to ephemeral Colab disk and be LOST\n"
+                   "    when the session ends.  Approve the Drive popup and\n"
+                   "    re-run this cell.  To proceed anyway (data will not\n"
+                   "    persist) use Archive(..., require_drive=False)."
+                   % type(exc).__name__)
+            if require:
+                raise RuntimeError(msg) from exc
+            print("  !! WARNING: " + msg)
+            root = os.path.abspath("./drive_local")
+            ensure_dir(root, verbose=verbose)
+            return root
+        if not os.path.isdir("/content/drive/MyDrive"):
+            msg = ("Drive mount reported success but /content/drive/MyDrive\n"
+                   "    is absent.  Refusing to write to ephemeral disk.")
+            if require:
+                raise RuntimeError(msg)
+            print("  !! WARNING: " + msg)
+            root = os.path.abspath("./drive_local")
+            ensure_dir(root, verbose=verbose)
+            return root
         if verbose:
-            print(f"  Not running in Colab -> using local root: {root}")
-        ensure_dir(root, verbose=verbose)
-        return root
+            print("  [mounted] Google Drive")
+        return "/content/drive/MyDrive"
+
+    root = os.path.abspath("./drive_local")
+    if verbose:
+        print("  Not running in Colab -> local root: %s" % root)
+    ensure_dir(root, verbose=verbose)
+    return root
 
 
 # ---------------------------------------------------------------- archive
@@ -104,15 +145,26 @@ class Archive:
 
     def __init__(self, base: str = DEFAULT_BASE,
                  project: str = DEFAULT_PROJECT,
-                 root: str | None = None, verbose: bool = True):
+                 root: str | None = None, verbose: bool = True,
+                 require_drive: bool = True):
         print("Preparing archive tree...")
-        self.root = root if root is not None else mount_drive(verbose)
+        self.root = (root if root is not None
+                     else mount_drive(verbose, require=require_drive))
+        self.persistent = self.root.startswith("/content/drive/MyDrive")
         self.base_dir = ensure_dir(os.path.join(self.root, base), verbose)
         self.project_dir = ensure_dir(os.path.join(self.base_dir, project),
                                       verbose)
         self.index_path = os.path.join(self.project_dir, INDEX_NAME)
         self._ensure_index(verbose)
-        print(f"Archive ready: {self.project_dir}\n")
+        print(f"Archive ready: {self.project_dir}")
+        if root is None and not getattr(self, "persistent", False):
+            try:
+                import google.colab  # noqa: F401
+                print("  !! NOT on Google Drive -- outputs are EPHEMERAL "
+                      "and will be lost when this session ends.")
+            except ImportError:
+                pass
+        print()
 
     # -- index -----------------------------------------------------------
     def _ensure_index(self, verbose: bool = True) -> None:
@@ -328,3 +380,32 @@ class Run:
             print(f"\nRun '{self.info['title']}' {status} in "
                   f"{self.info['duration_seconds']} s")
             print(f"  Folder: {self.dir}")
+
+
+def rescue_ephemeral(dest_root: str = "/content/drive/MyDrive",
+                     src_root: str = "/content/drive_local",
+                     base: str = DEFAULT_BASE,
+                     project: str = DEFAULT_PROJECT) -> int:
+    """Copy runs written to ephemeral disk into Google Drive.
+
+    Use after a session where the Drive mount silently failed (fixed in
+    v1.4, but older archives may exist).  Returns the number of run
+    folders copied.  Existing destinations are merged, not clobbered.
+    """
+    import shutil
+    src = os.path.join(src_root, base, project)
+    dst = os.path.join(dest_root, base, project)
+    if not os.path.isdir(src):
+        print("Nothing to rescue: %s does not exist" % src)
+        return 0
+    ensure_dir(dst, verbose=False)
+    n = 0
+    for name in sorted(os.listdir(src)):
+        s_path, d_path = os.path.join(src, name), os.path.join(dst, name)
+        if os.path.isdir(s_path):
+            shutil.copytree(s_path, d_path, dirs_exist_ok=True)
+            n += 1
+        elif not os.path.exists(d_path):
+            shutil.copy2(s_path, d_path)
+    print("Rescued %d run folder(s) into %s" % (n, dst))
+    return n
