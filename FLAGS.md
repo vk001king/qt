@@ -43,7 +43,25 @@
 - [x] Confirmed a genuine triangular DROPLET CRYSTAL forms, contrast
       ~19.7, with period matching the roton prediction to 1.8 percent
       in a commensurate box (7.00 vs 7.12 xi).
-- [ ] **OPEN: the crystal is not a converged stationary state.**
+- [x] DIAGNOSED (v1.5) why the crystal is not stationary.  Measured, not
+      guessed:
+        energy drift 1e-10, norm 1e-13 over t=6  -> solver is sound
+        n_peak constant 19.6, contrast stable to 3.6e-3 -> droplets keep
+          their shape; NOT droplet collapse, so LHY is adequate
+        net crystal slide 0.058 xi = 0.8 percent of a -> NOT a rigid
+          Goldstone translation either
+        Bragg AMPLITUDES ||dA||/||A|| grow to 0.46 over t=6 -> individual
+          droplets REARRANGE positions
+      A perfect-triangular-lattice seed reaches mu = 5.233 versus 5.509
+      from a noise seed, proving the noise-seeded state was defected and
+      that neither is the true minimum.
+      CONCLUSION: the energy landscape has many nearby minima and plain
+      imaginary-time gradient flow from a single seed lands in the wrong
+      one.  This is an OPTIMISATION problem, not a physics or solver bug.
+      Next attempt should be a proper minimiser (conjugate-gradient or
+      L-BFGS on the energy functional) and/or a multi-seed ensemble
+      keeping the lowest mu, rather than more gradient-flow steps.
+- [ ] **OPEN: obtain the true converged ground state (optimisation).**
       Imaginary-time residual plateaus at 2.3e-2 (res/mu 4e-3) and does
       not improve with 24k further steps at dtau down to 5e-5.  Real-time
       evolution shows density drift of order the contrast itself

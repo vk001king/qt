@@ -247,14 +247,25 @@ relaxation produces a genuine **triangular droplet crystal**, contrast
 ~19.7, whose period agrees with the linear roton prediction to **1.8%**
 (6.995 vs 7.124 xi) in a commensurate box.
 
-**Open problem, stated plainly:** that crystal is *not* a converged
-stationary state. The imaginary-time residual plateaus at 2.3e-2 and
-real-time evolution shows density drift of order the contrast itself, so
-it is metastable or defected rather than the ground state. The notebook
-runs this stationarity check and reports the failure rather than hiding
-it. Until it is resolved, the lattice constant cannot meaningfully be
-compared to published 164Dy measurements — so **validation rung V4 is
-started, not finished.** See `FLAGS.md` for the candidate causes. Three-dimensional vortex line tracking and the GPU backend are also outstanding. See `FLAGS.md`.
+**Open problem, diagnosed in v1.5.** The crystal is not a converged
+stationary state, and measurement now says exactly why. Over `t = 6`:
+energy is conserved to `1e-10` and norm to `1e-13`, so the solver is
+sound; `n_peak` holds at 19.6 and contrast drifts only `3.6e-3`, so the
+droplets keep their shape and there is **no collapse** (LHY is adequate);
+the net crystal slide is `0.058 xi`, under 1% of the lattice constant, so
+it is **not** a rigid Goldstone translation. What does change is the
+Bragg *amplitude* spectrum, `||dA||/||A|| -> 0.46`: individual droplets
+rearrange their positions. Seeding a perfect triangular lattice reaches
+`mu = 5.233` against `5.509` from a noise seed, proving the noise-seeded
+state was defected and neither is the minimum.
+
+So this is an **optimisation problem, not a physics or solver bug**: the
+landscape has many nearby minima and plain imaginary-time gradient flow
+from one seed finds the wrong one. The fix is a real minimiser
+(conjugate-gradient / L-BFGS on the energy functional) or a multi-seed
+ensemble keeping the lowest `mu` — not more gradient-flow steps. Until
+that lands, the lattice constant cannot be compared to published 164Dy
+measurements, so **validation rung V4 remains started, not finished.** Three-dimensional vortex line tracking and the GPU backend are also outstanding. See `FLAGS.md`.
 
 ---
 

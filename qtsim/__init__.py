@@ -34,7 +34,7 @@ from .drive_io import (Archive, Run, ensure_dir, mount_drive,
                        rescue_ephemeral)
 from . import diagnostics
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 __all__ = [
     "Grid",
