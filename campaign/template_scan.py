@@ -20,7 +20,8 @@ import json
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from qtsim import (Grid, EGPESolver, bare_dipolar_symbol)
+from qtsim import (Grid, EGPESolver, bare_dipolar_symbol,
+                   quasi2d_dipolar_symbol, quasi2d_dipolar_profile)
 from qtsim.lhy import gamma_tilde, Q5
 from qtsim.diagnostics import plaquette_charges_2d, helmholtz_split_2d
 
@@ -48,6 +49,14 @@ def parse_args():
                    help="Checkpoint interval (steps)")
     p.add_argument("--outdir", type=str, default="./results",
                    help="Output directory (ignored when --use_archive)")
+    p.add_argument("--kernel", type=str, default="quasi2d",
+                   choices=("quasi2d", "bare"),
+                   help="Dipolar kernel. 'quasi2d' is the projected kernel "
+                        "with a roton, required for supersolid physics; "
+                        "'bare' has no roton and gives only a box-scale "
+                        "mode (regression use only).")
+    p.add_argument("--l_z", type=float, default=6.0,
+                   help="Axial confinement length in xi (quasi2d kernel)")
     p.add_argument("--V0_factor", type=float, default=3.0,
                    help="Obstacle height in units of mu (need >~1 to shed)")
     p.add_argument("--n_stir", type=int, default=3,
@@ -157,12 +166,35 @@ def main():
     # --- Grid and solver setup ---
     grid = Grid((args.N, args.N), (args.L, args.L))
     gamma = gamma_tilde(args.eps_dd, args.n0_as3)
-    # 2D: dipoles polarized IN-PLANE along y.  Truncating the 3D axis
-    # (0,0,1) to 2D gives (0,0) -- the zero vector -- which silently
-    # produced NaN everywhere.  Caught by a live archive test run.
-    ehat = (0, 1) if grid.dim == 2 else (0, 0, 1)
-    Dk = bare_dipolar_symbol(grid, ehat)
     print(f"gamma_tilde = {gamma:.6f}, Q5 = {Q5(args.eps_dd):.6f}")
+
+    if args.kernel == "quasi2d":
+        # Projected quasi-2D kernel:
+        #   D(k) = 2*sqrt(2) - 3*sqrt(2*pi)*u*erfcx(u),   u = k*l_z/2
+        # runs from +2sqrt2 (repulsive) to -sqrt2 (attractive).  That sign
+        # change is the roton and it is what makes a droplet crystal
+        # possible.  The bare kernel has no such structure, so turbulence
+        # run on it is turbulence in a rippled superfluid, NOT a supersolid.
+        Dk = quasi2d_dipolar_symbol(grid, args.l_z)
+        kk = np.linspace(1e-6, 12, 20000)
+        Dp = quasi2d_dipolar_profile(kk, args.l_z)
+        inside = kk ** 2 + 2.0 * (1.0 + args.eps_dd * Dp) + 3.0 * gamma
+        imin = int(np.argmin(inside))
+        lam = 2.0 * np.pi / kk[imin]
+        print(f"kernel=quasi2d  l_z={args.l_z} xi   roton lambda={lam:.3f} xi"
+              f"   triangular a={2*lam/np.sqrt(3):.3f} xi")
+        print(f"  uniform state roton-unstable: {inside[imin] < 0}")
+        if inside[imin] >= 0:
+            print("  NOTE: no roton instability here, so no crystal will "
+                  "form.  Increase eps_dd or l_z for supersolid physics.")
+    else:
+        # Bare periodic symbol.  In 2D the dipoles are polarized IN-PLANE;
+        # truncating a 3D axis (0,0,1) to 2D gives (0,0), the zero vector,
+        # which silently produced NaN everywhere (caught by a live run).
+        # No roton -> no crystal.  Kept for regression only.
+        ehat = (0, 1) if grid.dim == 2 else (0, 0, 1)
+        Dk = bare_dipolar_symbol(grid, ehat)
+        print("kernel=bare  (no roton; box-scale mode only -- regression use)")
 
     solver = EGPESolver(grid, eps_dd=args.eps_dd, gamma=gamma, Dk=Dk)
     ph = solver.max_phase_per_step(args.dt)

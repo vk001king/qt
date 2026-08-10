@@ -101,6 +101,19 @@
       164Dy measurements.  That comparison is the actual content of V4
       and has NOT been done.
 
+## Fixed in v1.6 (stale campaign)
+- [x] `campaign/template_scan.py` was still importing and using
+      `bare_dipolar_symbol` -- it never received the v1.3 quasi-2D kernel.
+      The script that generates the paper's data was therefore simulating
+      turbulence in a rippled superfluid rather than a supersolid, which
+      defeats the point of the project.  It now takes `--kernel
+      {quasi2d,bare}` and `--l_z`, defaults to quasi2d, prints the roton
+      wavelength and the triangular lattice constant, and warns if the
+      uniform state is NOT roton-unstable at the chosen parameters.
+      `bare` is retained for regression only.
+- [x] `test_notebook_cells.py` docstring still claimed loops were
+      shortened; false since v1.2 and corrected.
+
 ## Code
 - [ ] Quasi-2D projected dipolar kernel (pancake geometry).  The current 2D
       kernel is the bare periodic symbol: fine for demonstration, but the
