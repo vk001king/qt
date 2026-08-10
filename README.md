@@ -4,7 +4,7 @@
 
 A validated pseudo-spectral solver for the **extended Gross–Pitaevskii equation** (eGPE) with dipolar interactions and Lee–Huang–Yang corrections, built to study vortex-tangle quantum turbulence in dipolar supersolids.
 
-**Status:** 29/29 validation checks passing. All 6 notebook cells verified by execution at **full length** (no shortened loops).
+**Status:** 38/38 validation checks passing. All 6 notebook cells verified by execution at **full length** (no shortened loops).
 
 **v1.1** fixes a temporal-aliasing blow-up in v1.0. See *Bug history* below.
 
@@ -78,7 +78,7 @@ qt/
 git clone https://github.com/vk001king/qt.git
 cd qt
 pip install numpy matplotlib
-python tests/run_validation.py          # expect: 29/29 checks passed
+python tests/run_validation.py          # expect: 38/38 checks passed
 python test_notebook_cells.py           # expect: 6/6 cells executed
 ```
 
@@ -144,7 +144,7 @@ with `D` the dipolar convolution (Fourier symbol `3cos²θ_k − 1`), `ε_dd = a
 
 ## Validation
 
-Run `python tests/run_validation.py`. Twenty-nine checks, all passing:
+Run `python tests/run_validation.py`. Thirty-eight checks, all passing:
 
 | Check | Measured | Criterion |
 |---|---|---|
@@ -218,6 +218,31 @@ projected kernel gives a physical modulation wavelength (rung V4).
 Higher validation rungs (comparison against published ¹⁶⁴Dy results, glitch dynamics, turbulence regression) are listed in `ROADMAP.md` as the next work item.
 
 ---
+
+## v1.6: direct energy minimisation
+
+Imaginary-time gradient flow is only steepest descent, and on the droplet
+crystal it plateaued. `qtsim/minimize.py` adds L-BFGS-B minimisation of the
+energy functional (norm handled by projection) and a multi-start ensemble
+keeping the lowest chemical potential:
+
+| method | mu | residual |
+|---|---|---|
+| gradient flow, 24000 steps | 5.509289 | 2.28e-02 |
+| single-start L-BFGS-B | 5.466331 | 4.74e-03 |
+| multi-start, lattice seed | **5.189268** | 4.73e-03 |
+
+On a simple trapped problem the same minimiser takes the residual from
+5.4e-02 to 7.5e-07 in 93 iterations, so the optimiser is not the limit --
+the crystal's landscape is genuinely rugged. Different seeds converge
+tightly into *different* basins (one reached residual 5.2e-05 at a higher
+mu), so a low residual does not imply the global minimum.
+
+Also fixed: `2*pi/k_dominant` is the density **modulation wavelength**, not
+the triangular lattice constant. The first Bragg vector satisfies
+`|k| = 4*pi/(a*sqrt3)`, so `a = 2*lambda/sqrt(3)` -- a factor 1.1547.
+Published 164Dy numbers quote the lattice constant, so conflating them
+would have corrupted the V4 comparison. Both are now reported.
 
 ## v1.4: Drive persistence is now enforced
 

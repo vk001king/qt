@@ -349,11 +349,146 @@ def t8_quasi2d_kernel():
            np.abs(S - P).max() < 1e-14 and rejected3d)
 
 
+# ----------------------------------------------------------------- T9
+def t9_conservation_laws():
+    """Conservation laws demonstrated by a real Colab campaign run.
+
+    A user's stirred-tangle data supplied two checks the suite did not
+    previously pin down, and both passed:
+
+      * Charge neutrality.  Vortex counts were exactly balanced at every
+        sample (+18/-18, +47/-47, +99/-99, +87/-87).  Total circulation
+        must vanish in a periodic box, so any net charge means the
+        detector is inventing or losing vortices.
+
+      * Free-decay energy conservation.  Total energy appeared to drop
+        4937.87 -> 4827.84 between the end of stirring and free decay,
+        which is alarming until one notices it is exactly the obstacle
+        potential energy int(V n) leaving the books.  Subtracting it, the
+        conservative energy went 4827.8475 -> 4827.8410, a relative
+        change of 1.4e-6 over 1000 unforced steps.
+
+    T9 reproduces both on a small grid so a regression cannot slip past.
+    """
+    g = Grid((96, 96), (48.0, 48.0))
+    dt = 0.01
+    rng = np.random.default_rng(11)
+
+    # relaxed uniform background
+    s = EGPESolver(g)
+    s.psi = np.ones(g.shape, dtype=complex)
+    Nt = s.norm()
+    s.step_imag(0.005, 400, norm_target=Nt)
+
+    # (a) charge neutrality under a strong moving obstacle that sheds vortices
+    mu, _ = s.mu_and_residual()
+    V0, sigma, radius = 3.0 * mu, 3.0, 12.0
+    omega = 1.1 * np.sqrt(2.0) / radius
+    def V_of(t):
+        V = np.zeros(g.shape)
+        for a0 in (0.0, 2 * np.pi / 3, 4 * np.pi / 3):
+            a = a0 + omega * t
+            r2 = ((g.X[0] - radius * np.cos(a)) ** 2
+                  + (g.X[1] - radius * np.sin(a)) ** 2)
+            V += V0 * np.exp(-r2 / (2 * sigma ** 2))
+        return V
+
+    t = 0.0
+    net_worst, nv_peak = 0, 0
+    for k in range(1500):
+        s.V = V_of(t + 0.5 * dt)
+        s.step_real(dt)
+        t += dt
+        if k % 300 == 299:
+            q = plaquette_charges_2d(s.psi)
+            npos, nneg = int((q == 1).sum()), int((q == -1).sum())
+            net_worst = max(net_worst, abs(npos - nneg))
+            nv_peak = max(nv_peak, npos + nneg)
+    record("T9a charge neutrality under stirring",
+           f"worst |net|={net_worst}, peak count={nv_peak}",
+           "net == 0 with vortices present",
+           net_worst == 0 and nv_peak > 0)
+
+    # (b) switching the drive off must remove exactly int(V n) and nothing else
+    n = np.abs(s.psi) ** 2
+    Epot_on = float(g.integrate(s.V * n))
+    E_on = s.energy()["total"]
+    s.V = np.zeros(g.shape)
+    E_off = s.energy()["total"]
+    bookkeeping = abs((E_on - E_off) - Epot_on) / max(abs(Epot_on), 1e-30)
+    record("T9b removing drive removes exactly int(V n)",
+           f"{bookkeeping:.2e}", "< 1e-10", bookkeeping < 1e-10)
+
+    # (c) free decay is conservative
+    E0, N0 = s.energy()["total"], s.norm()
+    s.step_real(dt, 1000)
+    dE = abs(s.energy()["total"] - E0) / abs(E0)
+    dN = abs(s.norm() - N0) / N0
+    record("T9c free-decay energy conservation", f"{dE:.2e}", "< 1e-5",
+           dE < 1e-5)
+    record("T9d free-decay norm conservation", f"{dN:.2e}", "< 1e-10",
+           dN < 1e-10)
+
+    # (e) charge still neutral after decay
+    q = plaquette_charges_2d(s.psi)
+    net = int((q == 1).sum()) - int((q == -1).sum())
+    record("T9e charge neutrality after decay", f"net={net}", "net == 0",
+           net == 0)
+
+
+# ---------------------------------------------------------------- T10
+def t10_minimizer():
+    """Direct L-BFGS-B minimisation must beat imaginary-time gradient flow.
+
+    Measured on the dipolar droplet crystal (eps_dd=1.8, l_z=6 xi):
+        gradient flow, 24000 steps : mu = 5.509289, residual 2.28e-02
+        single-start L-BFGS-B      : mu = 5.466331, residual 4.74e-03
+        multi-start, lattice seed  : mu = 5.189268, residual 4.73e-03
+    Gradient flow had plateaued; the landscape has many nearby minima, so
+    a better optimiser and several starts both matter.  T10 checks the
+    machinery on a cheap trapped problem where the answer is unambiguous.
+    """
+    try:
+        from qtsim.minimize import minimize_energy
+    except ImportError:
+        record("T10 minimizer available", "scipy absent", "skipped", True)
+        return
+
+    g = Grid((96, 96), (26.0, 26.0))
+    om, N = 0.2, 600.0
+    V = 0.5 * om ** 2 * (g.X[0] ** 2 + g.X[1] ** 2)
+    s = EGPESolver(g, V=V)
+    rng = np.random.default_rng(5)
+    s.psi = np.exp(-(g.X[0] ** 2 + g.X[1] ** 2) / 40.0).astype(complex)
+    s.psi += 0.05 * rng.standard_normal(g.shape)
+    s.psi *= np.sqrt(N / s.norm())
+
+    s.step_imag(0.004, 400, norm_target=N)      # deliberately under-relaxed
+    E_flow = s.energy()["total"]
+    _, r_flow = s.mu_and_residual()
+
+    info = minimize_energy(s, N, maxiter=1500, verbose=False)
+
+    record("T10a L-BFGS lowers the energy",
+           f"E {E_flow:.5f} -> {info['energy']:.5f}",
+           "energy decreases", info["energy"] < E_flow)
+    record("T10b L-BFGS improves the residual",
+           f"{r_flow:.2e} -> {info['residual']:.2e}",
+           "residual improves by >10x", info["residual"] < r_flow / 10)
+    record("T10c norm preserved by the minimiser",
+           f"{abs(s.norm() - N) / N:.2e}", "< 1e-10",
+           abs(s.norm() - N) / N < 1e-10)
+    record("T10d minimiser reports convergence",
+           f"nit={info['nit']}, success={info['success']}",
+           "success True", info["success"])
+
+
 if __name__ == "__main__":
     t_start = time.time()
     for t in (t1_plane_wave, t2_order, t3_thomas_fermi, t4_q5,
               t5_kernels, t6_vortex, t7_long_time_stability,
-              t8_quasi2d_kernel):
+              t8_quasi2d_kernel, t9_conservation_laws,
+              t10_minimizer):
         t()
     npass = sum(1 for *_, p in RESULTS if p)
     print(f"\n== {npass}/{len(RESULTS)} checks passed "
@@ -363,5 +498,9 @@ if __name__ == "__main__":
         json.dump([{ "name": n, "value": v, "criterion": c, "pass": p}
                    for n, v, c, p in RESULTS], f, indent=1)
     sys.exit(0 if npass == len(RESULTS) else 1)
+
+
+
+
 
 

@@ -172,5 +172,59 @@
   "value": "maxdiff=0.0e+00, rejected3d=True",
   "criterion": "match and 3D rejected",
   "pass": true
+ },
+ {
+  "name": "T9a charge neutrality under stirring",
+  "value": "worst |net|=0, peak count=52",
+  "criterion": "net == 0 with vortices present",
+  "pass": true
+ },
+ {
+  "name": "T9b removing drive removes exactly int(V n)",
+  "value": "6.50e-16",
+  "criterion": "< 1e-10",
+  "pass": true
+ },
+ {
+  "name": "T9c free-decay energy conservation",
+  "value": "1.28e-06",
+  "criterion": "< 1e-5",
+  "pass": true
+ },
+ {
+  "name": "T9d free-decay norm conservation",
+  "value": "1.03e-12",
+  "criterion": "< 1e-10",
+  "pass": true
+ },
+ {
+  "name": "T9e charge neutrality after decay",
+  "value": "net=0",
+  "criterion": "net == 0",
+  "pass": true
+ },
+ {
+  "name": "T10a L-BFGS lowers the energy",
+  "value": "E 1127.07351 -> 1125.43639",
+  "criterion": "energy decreases",
+  "pass": true
+ },
+ {
+  "name": "T10b L-BFGS improves the residual",
+  "value": "5.41e-02 -> 7.54e-07",
+  "criterion": "residual improves by >10x",
+  "pass": true
+ },
+ {
+  "name": "T10c norm preserved by the minimiser",
+  "value": "1.89e-16",
+  "criterion": "< 1e-10",
+  "pass": true
+ },
+ {
+  "name": "T10d minimiser reports convergence",
+  "value": "nit=93, success=True",
+  "criterion": "success True",
+  "pass": true
  }
 ]

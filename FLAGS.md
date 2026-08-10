@@ -61,7 +61,31 @@
       Next attempt should be a proper minimiser (conjugate-gradient or
       L-BFGS on the energy functional) and/or a multi-seed ensemble
       keeping the lowest mu, rather than more gradient-flow steps.
-- [ ] **OPEN: obtain the true converged ground state (optimisation).**
+- [x] ADDRESSED in v1.6: direct energy minimisation implemented
+      (`qtsim/minimize.py`).  L-BFGS-B on the energy functional with the
+      norm handled by projection, plus a multi-start ensemble keeping the
+      lowest mu.  Measured on the crystal:
+        gradient flow, 24000 steps : mu = 5.509289, residual 2.28e-02
+        single-start L-BFGS-B      : mu = 5.466331, residual 4.74e-03
+        multi-start, lattice seed  : mu = 5.189268, residual 4.73e-03
+      On a simple trapped problem the same minimiser drives the residual
+      from 5.4e-02 to 7.5e-07 in 93 iterations (test T10b), so the
+      optimiser is not the limitation.
+- [x] Interpretation bug found and fixed: `a_measured = 2*pi/k_dominant`
+      is the density MODULATION WAVELENGTH, not the triangular lattice
+      constant.  The first Bragg vector of a triangular lattice has
+      |k| = 4*pi/(a*sqrt3), so a = 2*lambda/sqrt(3) -- a factor 1.1547.
+      Published 164Dy numbers quote the lattice constant, so conflating
+      them would have corrupted the V4 comparison.  Both are now reported.
+- [ ] **STILL OPEN: prove the global minimum.**  Even multi-start L-BFGS
+      plateaus near residual 5e-3 on the crystal rather than the 1e-8
+      target, and different seeds converge tightly into different basins
+      (one reached residual 5.2e-05 at a HIGHER mu of 5.397).  So low
+      residual does not imply low mu: the landscape is genuinely rugged.
+      Next options: many more seeds; simulated annealing over eps_dd;
+      constraining the unit cell and varying it explicitly; or comparing
+      against a published lattice constant to decide which basin is
+      physical.  Until one of these lands, V4 is not finished.
       Imaginary-time residual plateaus at 2.3e-2 (res/mu 4e-3) and does
       not improve with 24k further steps at dtau down to 5e-5.  Real-time
       evolution shows density drift of order the contrast itself

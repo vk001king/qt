@@ -33,8 +33,9 @@ from .diagnostics import (
 from .drive_io import (Archive, Run, ensure_dir, mount_drive,
                        rescue_ephemeral)
 from . import diagnostics
+from . import minimize
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 __all__ = [
     "Grid",
@@ -57,6 +58,7 @@ __all__ = [
     "mount_drive",
     "rescue_ephemeral",
     "diagnostics",
+    "minimize",
     "selfcheck",
 ]
 
