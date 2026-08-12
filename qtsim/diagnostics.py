@@ -161,8 +161,21 @@ def plaquette_charges_2d_masked(psi, grid: Grid, r_in: float = 0.5,
         return q_m
     raw = int((q != 0).sum())
     kept = int((q_m != 0).sum())
+    net = int((q_m == 1).sum() - (q_m == -1).sum())
+    # MASK QUALITY GATE.  True total circulation is exactly zero in a
+    # periodic box, and the RAW plaquette count respects that identically.
+    # The mask is spatial, so it can clip one sign preferentially near a
+    # fluid/void interface and break neutrality.  The residual net charge
+    # therefore measures how badly the mask is mis-clipping, and is the only
+    # internal check available on it.
+    # Measured on a stirred crystal: |net|/kept fell 14% -> 11% -> 2% ->
+    # 0.8% as the vortex count grew 14 -> 74 -> 147 -> 250, i.e. the mask is
+    # LEAST trustworthy exactly when there are fewest vortices.
+    imbalance = abs(net) / kept if kept else 0.0
     stats = dict(raw=raw, kept=kept,
                  rejected=raw - kept,
                  reject_fraction=(raw - kept) / raw if raw else 0.0,
-                 net_charge=int((q_m == 1).sum() - (q_m == -1).sum()))
+                 net_charge=net,
+                 charge_imbalance=imbalance,
+                 mask_trustworthy=bool(imbalance < 0.05))
     return q_m, stats

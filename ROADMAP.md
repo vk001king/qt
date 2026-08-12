@@ -13,8 +13,9 @@ parameter.  PHASE4_REVISED.md rebuilds the design.  Remaining:
 
 ## Step 1.75 — TRACK A: the H4' scan (READY TO RUN)   ~2-4 weeks
 `campaign/track_a_scan.py` implements the frustration-crossover experiment
-that decides contradiction C8.  Verified to bracket R = ell/d = 1:
-drives 0.2 -> 1.6 give R from 4.65 down to 0.46 (cells=5).
+that decides contradiction C8.  Calibrated and verified at the default box (cells=12, 4 box-scaled
+obstacles): drives 0.4 -> 4.2 span R from above 2 down to ~0.5, with masked
+vortex counts of 28 to 391 and mask charge imbalance mostly under 4 percent.
 
     python campaign/track_a_scan.py --quick     # smoke test, ~1 min
     python campaign/track_a_scan.py             # full scan, 8 drives x 3 seeds
@@ -24,8 +25,14 @@ costs only the run in progress.  Every run records raw AND masked vortex
 counts, avalanche statistics at three detection thresholds, and energy/norm
 drift as a health check.  Rows flagged not-conservative must be discarded.
 
-- [ ] Run the full scan at cells=5, then repeat at cells=8 for finite-size
-      scaling (the avalanche exponents are meaningless without it)
+- [ ] Run the full scan at cells=12, then repeat at cells=8 and 16 for
+      finite-size scaling (avalanche exponents are meaningless without it)
+- [ ] Recalibrate the drive list for each box size -- vortex yield depends
+      on drives, V0_factor, n_stir AND cells jointly, and does not transfer.
+      Yield is also non-monotonic at high drive (Ma=3.2 -> nv=391 but
+      Ma=4.2 -> nv=174), so read R from the table, never infer it.
+- [ ] Discard any row with nv < 20 on the R>1 side: the masked count is not
+      trustworthy there and R scales as nv^{-1/2}.
 - [ ] Decide C8 from the event-count-versus-R trend
 - [ ] Test an INCOMMENSURATE box: the 1.5% period agreement is currently
       partly circular because the box imposes the roton spacing

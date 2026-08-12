@@ -114,6 +114,38 @@
 - [x] `test_notebook_cells.py` docstring still claimed loops were
       shortened; false since v1.2 and corrected.
 
+## v2.3: THE MASK SYSTEMATIC IS WORSE, AND WORST WHERE H4' NEEDS IT
+Colab runs at real parameters produced three corrections.
+
+- [x] **The mask rejection is 35-95 percent and TIME-DEPENDENT, not the
+      constant 20-50 percent previously documented.**  Measured across one
+      stirring run: raw 138 -> masked 14 (90% rejected) at t=5, then 294->74
+      (75%), 316->147 (54%), 382->250 (35%).  The TRENDS differ too: raw
+      grows 2.8x while masked grows 18x, so an L(t) built on raw counts has
+      the wrong SHAPE, not merely an offset.  This damages H1 (threshold)
+      and H5 (decay laws) directly, since both read L(t).
+- [x] NEW DIAGNOSTIC: masked net charge as a mask-quality gate.  Raw counts
+      are exactly charge-neutral (69/69, 147/147, 158/158, 191/191); masked
+      are not (+8/-6, +33/-41, +72/-75, +124/-126).  True circulation is
+      exactly zero, so the residual imbalance measures mis-clipping.
+      Imbalance fell 14% -> 11% -> 2% -> 0.8% as nv grew 14 -> 250.
+      `plaquette_charges_2d_masked` now returns charge_imbalance and
+      mask_trustworthy (imbalance < 5%).
+- [ ] **CONSEQUENCE FOR H4': the R>1 side is the hardest to measure.**
+      At R = 4.65 the scan reported nv = 1 from raw 22 (95% rejected) with
+      100 percent charge imbalance.  Since R ~ nv^{-1/2}, an ambiguity of
+      1 versus 3 vortices is a factor 1.7 in R -- in the exact quantity the
+      crossover is defined against.  Mitigation: larger boxes.
+      nv(R=1) = cells^2*sqrt(3)/2, so cells=5 gives only nv=5 at R=2 while
+      cells=12 gives nv=31 at R=2 and nv=14 at R=3.  Default --cells raised
+      from 8 to 12; the scan now flags any row with nv<20 as untrustworthy
+      and tells the user to re-run larger rather than interpret it.
+- [x] CORRECTION to a claim I made: the crystal period agreement is ~5.0
+      percent at full optimiser settings, NOT the 1.5 percent I quoted from
+      a shortened local test (maxiter=1200, 2 seeds).  The full Colab run
+      (maxiter=2500, 4 seeds) hit the iteration cap and gave 4.99 percent.
+      The agreement is optimiser-dependent, which is itself worth reporting.
+
 ## v2.1: REAL PARAMETERS FIXED THE METASTABILITY; TWO BOX/LOGIC BUGS
 Running cell 4 at the real experimental parameters produced the single most
 consequential result so far, plus exposed two of our own bugs.

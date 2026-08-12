@@ -289,6 +289,16 @@ rejected, the real vortex kept, and a no-op on a clean pair.
 | annulus mask (default) | 724 (−17%) |
 | crude corner mask | 459 (−47%) |
 
+**v2.3 correction — the systematic is worse than this table suggests.** In a
+stirred run the rejection fraction was measured at 90%, 75%, 54%, 35% at
+successive times, and the raw and masked counts grow at different rates
+(2.8× versus 18×). So raw `L(t)` has the wrong *shape*, not just an offset.
+The masked net charge is now returned as a quality gate: true circulation is
+exactly zero, so residual imbalance measures mis-clipping, and it reaches
+100% when only one vortex survives masking. This makes the low-vortex
+(`R > 1`) side of the H4′ crossover the hardest region to measure, and is
+why the Track A default box is now 12 cells rather than 5.
+
 Vortex line density in a droplet crystal therefore carries a
 **method-dependent systematic of order 20–50%**. `L` is the primary
 observable for the threshold, friction, avalanche and decay analyses, so

@@ -82,13 +82,25 @@ def parse_args():
                    help="stirring Mach numbers to scan (default: 8 values)")
     p.add_argument("--seeds", type=int, nargs="+", default=None,
                    help="random seeds per drive (default: 3)")
+    p.add_argument("--n_stir", type=int, default=0,
+                   help="number of rotating obstacles.  0 = scale with box "
+                        "as max(1, cells//3), which keeps vortex production "
+                        "per unit AREA roughly constant.  Without scaling, a "
+                        "single obstacle in a 3x larger box gives ~6x fewer "
+                        "vortices at the same drive (measured: nv=12 at "
+                        "cells=5 versus nv=2 at cells=12, Ma=0.6).")
     p.add_argument("--V0_factor", type=float, default=1.5,
                    help="obstacle height in units of mu.  Needs >~1 to shed "
                         "vortices at all; larger values shed far more, so "
                         "this is the coarse control on vortex number while "
                         "--drives is the fine control.")
-    p.add_argument("--cells", type=int, default=8,
-                   help="droplet cells across the box (sets box size)")
+    p.add_argument("--cells", type=int, default=12,
+                   help="droplet cells across the box.  MATTERS: nv(R=1) = "
+                        "cells^2*sqrt(3)/2, and a masked vortex count is only "
+                        "trustworthy above nv~20 (charge imbalance <5%).  "
+                        "cells=5 gives nv=5 at R=2 and the count is then 100% "
+                        "charge-imbalanced -- useless on the R>1 side that H4' "
+                        "needs.  cells=12 gives nv=31 at R=2, nv=14 at R=3.")
     p.add_argument("--dx", type=float, default=0.5,
                    help="grid spacing in xi (<=0.5 resolves the core)")
     p.add_argument("--T_stir", type=float, default=60.0)
@@ -189,6 +201,8 @@ def sample(solver, grid, t, d, area):
     return dict(t=float(t), nv=nv, nv_raw=nv_raw, net_charge=net,
                 L=float(L), ell=float(ell), R=float(ell / d),
                 mask_reject=float(mst["reject_fraction"]),
+                mask_imbalance=float(mst["charge_imbalance"]),
+                mask_trustworthy=bool(mst["mask_trustworthy"]),
                 E_incomp=float(Ei), E_comp=float(Ec),
                 E_total=float(solver.energy()["total"]),
                 norm=float(solver.norm()),
@@ -250,7 +264,9 @@ def run_point(archive, args, scales, Ma, seed):
         n0_as3=args.n0_as3, Ma=Ma, seed=seed, cells=args.cells,
         grid=list(grid.shape), box=list(grid.lengths), dt=dt,
         k_rot=k_rot, lambda_roton=lam, d_droplet=d, min_inside=min_inside,
-        T_stir=args.T_stir, T_decay=args.T_decay))
+        T_stir=args.T_stir, T_decay=args.T_decay,
+        n_stir=(args.n_stir if args.n_stir > 0 else max(1, args.cells // 3)),
+        V0_factor=args.V0_factor))
 
     # ---- ground state: lattice seed, then L-BFGS polish -------------------
     Nt = float(grid.integrate(np.ones(grid.shape)))
@@ -268,7 +284,8 @@ def run_point(archive, args, scales, Ma, seed):
     solver.psi *= np.exp(1j * 0.02 * rng.standard_normal(grid.shape))
     solver.psi *= np.sqrt(Nt / solver.norm())
 
-    V_stir, V0, radius = make_stirrers(grid, info["mu"], Ma,
+    n_stir = args.n_stir if args.n_stir > 0 else max(1, args.cells // 3)
+    V_stir, V0, radius = make_stirrers(grid, info["mu"], Ma, n_stir=n_stir,
                                        V0_factor=args.V0_factor)
     recs = []
     every = max(1, int(round(args.sample_every / dt)))
@@ -289,7 +306,12 @@ def run_point(archive, args, scales, Ma, seed):
     r = sample(solver, grid, t, d, area)
     r["phase"] = "decay_start"
     recs.append(r)
-    print("    end of stirring: nv=%d R=%.3f" % (r["nv"], r["R"]), flush=True)
+    print("    end of stirring: nv=%d (raw %d, %.0f%% rejected) R=%.3f"
+          "  mask imbalance %.1f%%%s"
+          % (r["nv"], r["nv_raw"], 100 * r["mask_reject"], r["R"],
+             100 * r["mask_imbalance"],
+             "" if r["mask_trustworthy"] else "  [MASK SUSPECT]"),
+          flush=True)
 
     # ---- free decay ------------------------------------------------------
     for k in range(int(args.T_decay / dt)):
@@ -315,6 +337,10 @@ def run_point(archive, args, scales, Ma, seed):
         Ma=Ma, seed=seed, contrast=contrast, mu=info["mu"],
         residual=info["residual"], dt=dt,
         R_at_decay_start=r["R"], nv_at_decay_start=r["nv"],
+        nv_raw_at_decay_start=r["nv_raw"],
+        mask_reject_at_decay_start=float(r["mask_reject"]),
+        mask_imbalance_at_decay_start=float(r["mask_imbalance"]),
+        mask_trustworthy=bool(r["mask_trustworthy"]),
         R_decay_min=float(min(Rs)) if Rs else None,
         R_decay_max=float(max(Rs)) if Rs else None,
         energy_drift=float(dE), norm_drift=float(dN),
@@ -340,14 +366,19 @@ def run_point(archive, args, scales, Ma, seed):
 def main():
     args = parse_args()
     if args.quick:
-        args.drives = args.drives or [0.2, 0.6]
+        args.drives = args.drives or [0.6, 2.4]
         args.seeds = args.seeds or [0]
-        args.cells, args.T_stir, args.T_decay = 5, 15.0, 40.0
+        args.cells, args.T_stir, args.T_decay = 8, 15.0, 40.0
     # R = ell/d must BRACKET 1.  Measured on cells=5: Ma=0.8 already gives
     # nv=183 (R=0.34) while nv(R=1) is only ~22, so the useful range is far
     # below the earlier guess.  These low drives, with V0_factor=1.5 and a
     # single obstacle, are chosen to straddle the crossover.
-    args.drives = args.drives or [0.15, 0.25, 0.35, 0.5, 0.7, 0.9, 1.2, 1.6]
+    # Calibrated for the DEFAULT box (cells=12, 4 obstacles, V0=1.5 mu).
+    # Measured there: Ma=0.6 -> nv=28 (R=2.11), Ma=2.0 -> nv=91 (R=1.17),
+    # both with mask imbalance under 4 percent.  These drives straddle R=1
+    # and keep nv above the ~20 trustworthiness floor throughout.
+    # A drive list calibrated at one box size does NOT transfer to another.
+    args.drives = args.drives or [0.4, 0.6, 0.9, 1.3, 1.8, 2.4, 3.2, 4.2]
     args.seeds = args.seeds or [0, 1, 2]
 
     gamma = gamma_tilde(args.eps_dd, args.n0_as3)
@@ -381,8 +412,14 @@ def main():
     print("  R=2 -> nv=%.0f,  R=1.5 -> nv=%.0f,  R=0.7 -> nv=%.0f,"
           "  R=0.5 -> nv=%.0f"
           % (nv1 / 4, nv1 / 2.25, nv1 / 0.49, nv1 / 0.25))
-    print("  The scan MUST bracket R=1; if every row has R<1 the crossover")
-    print("  is invisible and the drives (or --V0_factor) must be lowered.")
+    print("  obstacles: %d (scaled from cells)"
+          % (args.n_stir if args.n_stir > 0 else max(1, args.cells // 3)))
+    print("  The scan MUST bracket R=1.  Vortex yield depends on --drives,")
+    print("  --V0_factor, --n_stir AND --cells together, so a drive list")
+    print("  calibrated for one box size will NOT transfer to another.")
+    print("  Run a 2-point probe first (e.g. --drives 0.5 2.0 --seeds 0")
+    print("  with short times) and check that R straddles 1 before")
+    print("  committing to the full scan.")
     print()
 
     done = {r.get("title") for r in archive.load_index().get("runs", [])
@@ -405,12 +442,24 @@ def main():
     print("=" * 66)
     print("SCAN SUMMARY  (%.1f min)" % ((time.time() - t0) / 60))
     print("=" * 66)
-    print("   Ma  seed  contrast   R_start   R_min   events(3s)  conservative")
+    print("   Ma  seed  nv(raw)   rej%  imb%  R_start   R_min  ev(3s)  cons  mask")
     for s in results:
-        print("  %4.2f  %4d  %8.3f  %8.3f  %6.3f  %10d  %s"
-              % (s["Ma"], s["seed"], s["contrast"], s["R_at_decay_start"],
-                 s["R_decay_min"] or float("nan"),
-                 s["avalanches"]["theta_3.0"]["n_events"], s["conservative"]))
+        print("  %4.2f  %4d  %3d(%4d)  %4.0f  %4.1f  %7.3f  %6.3f  %5d  %s  %s"
+              % (s["Ma"], s["seed"], s["nv_at_decay_start"],
+                 s["nv_raw_at_decay_start"],
+                 100 * s["mask_reject_at_decay_start"],
+                 100 * s["mask_imbalance_at_decay_start"],
+                 s["R_at_decay_start"], s["R_decay_min"] or float("nan"),
+                 s["avalanches"]["theta_3.0"]["n_events"],
+                 "T" if s["conservative"] else "F",
+                 "ok" if s["mask_trustworthy"] else "SUSPECT"))
+    thin = [s for s in results if s["nv_at_decay_start"] < 20]
+    if thin:
+        print()
+        print("  !! %d row(s) have nv < 20 at decay start, where the masked"
+              % len(thin))
+        print("     count is not trustworthy.  Re-run those at larger --cells")
+        print("     before drawing any conclusion about the R>1 side.")
     Rs = [s["R_at_decay_start"] for s in results if s["R_at_decay_start"]]
     if Rs and (min(Rs) > 1.0 or max(Rs) < 1.0):
         print()
@@ -428,6 +477,20 @@ def main():
     print("  appear at all R, Alana's smoothness is an artefact of imposed")
     print("  lattice symmetry.  All three outcomes are publishable; only the")
     print("  framing changes.")
+    print()
+    print("  The 'mask' column matters most at LOW vortex number -- which is")
+    print("  exactly the R>1 side of the crossover H4' needs.  Rejection")
+    print("  reaches 90-95% there and the masked count becomes strongly")
+    print("  charge-imbalanced (100% at nv=1).  Since R scales as nv^-1/2, an")
+    print("  ambiguity of 1 vs 3 vortices is a factor 1.7 in R.  Any SUSPECT")
+    print("  row on the R>1 side should be re-run at larger --cells rather")
+    print("  than interpreted: nv(R=1) = cells^2*sqrt(3)/2, so cells=12 keeps")
+    print("  nv=31 at R=2 and nv=14 at R=3.")
+    print()
+    print("  NOTE, measured: vortex yield is NON-MONOTONIC in drive at the")
+    print("  top of the range (Ma=3.2 gave nv=391 while Ma=4.2 gave nv=174).")
+    print("  So do not assume larger Ma means smaller R -- read R off the")
+    print("  table rather than inferring it from the drive.")
     print()
     print("  Check the 'conservative' column first.  Any False row is a")
     print("  numerical failure, not physics, and must be discarded.")

@@ -145,6 +145,8 @@ def collect_diagnostics(solver, grid, t):
         "n_vortex_minus_masked": nv_minus_m,
         "n_vortex_total_masked": nv_plus_m + nv_minus_m,
         "vortex_mask_reject_fraction": mstat["reject_fraction"],
+        "vortex_mask_charge_imbalance": mstat["charge_imbalance"],
+        "vortex_mask_trustworthy": mstat["mask_trustworthy"],
         "n_max": float(n.max()),
         "n_min": float(n.min()),
     }
