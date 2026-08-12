@@ -11,6 +11,14 @@ parameter.  PHASE4_REVISED.md rebuilds the design.  Remaining:
 - [ ] Obtain a measured droplet spacing to close V4
 - [ ] Implement Track B trapped few-droplet geometry
 
+## Step 1.9 — GPU backend (v2.4, done except real-hardware check)
+- [x] CuPy backend implemented, explicit opt-in, verified against a fake
+      GPU module to prove the abstraction has no gaps
+- [x] Fixed a real regression: the sequential notebook test harness had
+      been silently broken since v1.4 outside Colab
+- [ ] Run Cell 7 on real Colab GPU hardware; record actual speedup
+- [ ] Re-run Track A at `--backend gpu` once confirmed working
+
 ## Step 1.75 — TRACK A: the H4' scan (READY TO RUN)   ~2-4 weeks
 `campaign/track_a_scan.py` implements the frustration-crossover experiment
 that decides contradiction C8.  Calibrated and verified at the default box (cells=12, 4 box-scaled

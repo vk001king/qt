@@ -244,5 +244,29 @@
   "value": "raw=2, masked=2",
   "criterion": "both == 2",
   "pass": true
+ },
+ {
+  "name": "T12a default backend is cpu",
+  "value": "'cpu'",
+  "criterion": "'cpu'",
+  "pass": true
+ },
+ {
+  "name": "T12b invalid backend name rejected",
+  "value": "raised=True",
+  "criterion": "ValueError raised",
+  "pass": true
+ },
+ {
+  "name": "T12c GPU-unavailable request raises (never silent fallback)",
+  "value": "raised=True, RuntimeError=True",
+  "criterion": "raises RuntimeError",
+  "pass": true
+ },
+ {
+  "name": "T12d full pipeline on explicit backend='cpu'",
+  "value": "mu=5.2716, residual=1.86e-04, masked_vortices=0",
+  "criterion": "finite mu, finite residual, diagnostics run",
+  "pass": true
  }
 ]

@@ -63,6 +63,9 @@ def parse_args():
                    help="Obstacle height in units of mu (need >~1 to shed)")
     p.add_argument("--n_stir", type=int, default=3,
                    help="Number of rotating obstacles")
+    p.add_argument("--backend", type=str, default="cpu", choices=("cpu", "gpu"),
+                   help="'cpu' (NumPy, default) or 'gpu' (CuPy).  Explicit "
+                        "opt-in only; raises if requested and unavailable.")
     p.add_argument("--use_archive", action="store_true",
                    help="Save into MyDrive/Research/Quantum_Turbulence/"
                         "<date>_<time>_<title>/ with full structure")
@@ -180,7 +183,7 @@ def main():
         run = archive.new_run(title, params=params)
 
     # --- Grid and solver setup ---
-    grid = Grid((args.N, args.N), (args.L, args.L))
+    grid = Grid((args.N, args.N), (args.L, args.L), backend=args.backend)
     gamma = gamma_tilde(args.eps_dd, args.n0_as3)
     print(f"gamma_tilde = {gamma:.6f}, Q5 = {Q5(args.eps_dd):.6f}")
 

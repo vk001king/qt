@@ -114,6 +114,45 @@
 - [x] `test_notebook_cells.py` docstring still claimed loops were
       shortened; false since v1.2 and corrected.
 
+## v2.4: GPU BACKEND (CuPy), EXPLICIT OPT-IN ONLY
+Colab's T4 was enabled but idle: every module hardcoded `import numpy as
+np`, and turning on a GPU runtime does nothing by itself.
+
+- [x] `qtsim/backend.py` added: `Grid(..., backend="cpu"|"gpu")` selects
+      NumPy or CuPy.  Default is "cpu" -- nothing changes unless requested.
+      A "gpu" request with no CuPy/GPU present RAISES (RuntimeError) rather
+      than silently continuing on CPU -- the same class of bug already
+      fixed once for Google Drive persistence (a silent fallback there
+      destroyed a full session's results with no warning in the output).
+- [x] `kernels.py`, `solver.py`, `diagnostics.py`, `minimize.py` rewritten
+      to use `grid.xp` / `grid.fft_mod` instead of a hardcoded `numpy`.
+      Kernel construction (which needs scipy.special.erfcx, CPU-only) is
+      built on the host once per run and moved to the device in a single
+      transfer -- this is a one-time cost, unlike the per-step FFTs, so
+      correctness mattered far more than avoiding the transfer.
+- [x] `minimize.py`: scipy's L-BFGS-B is CPU-only.  The gradient's
+      expensive part (FFTs, nonlinear terms) runs on the selected backend;
+      only the packed vector is transferred to host once per iteration.
+      This transfer is now the throughput floor for the MINIMISER
+      specifically on GPU, and is documented as such rather than hidden --
+      step_real/step_imag never leave the device and get the full speedup.
+- [x] `campaign/track_a_scan.py` and `campaign/template_scan.py` both
+      accept `--backend {cpu,gpu}`.
+- [x] Verified: full CPU regression (all 41 prior checks) plus 4 new
+      checks (T12) covering default-cpu, invalid-name rejection, the
+      loud-failure guarantee, and a full pipeline (kernel + solver +
+      minimiser + masked diagnostics together) on the explicit path.
+      45/45 total.  CuPy/GPU itself could NOT be exercised in the sandbox
+      this was built in (no GPU present) -- the actual speedup on a T4
+      remains to be measured in Colab, not asserted here.
+- [ ] **UNVERIFIED: has not run on a real GPU yet.**  The design is
+      correct by construction (identical array API, explicit checks,
+      CPU-path regression-tested) but CuPy's numerical results should be
+      spot-checked against the CPU path once run in Colab -- FFT
+      libraries can differ in the last few bits of floating-point
+      rounding across backends, which matters for the tight residual
+      tolerances used in T3/T10.
+
 ## v2.3: THE MASK SYSTEMATIC IS WORSE, AND WORST WHERE H4' NEEDS IT
 Colab runs at real parameters produced three corrections.
 
@@ -319,3 +358,67 @@ not abstract-only as in Phase 1.
 | Tang, PNAS 118, e2021957118 (2021) | partial author list |
 | arXiv:0904.3440 dipolar PGPE methods | published venue |
 | JLTP mutual friction review (2023) | author list |
+
+## v2.4: GPU BACKEND (CuPy), AND A REAL TEST-HARNESS REGRESSION FOUND
+
+### GPU support added
+- [x] `qtsim/backend.py` selects NumPy (CPU, default) or CuPy (GPU)
+      EXPLICITLY -- `backend="gpu"` must be requested, and raises loudly if
+      CuPy/CUDA is unavailable rather than silently falling back to CPU.
+      Same "explicit, not automatic" principle as the Drive-persistence fix
+      (v1.4): a person must never mistake a CPU run for a GPU one.
+- [x] `Grid`, `EGPESolver`, `diagnostics.py`, `minimize.py` all thread the
+      array module through as `grid.xp`/`grid.fft_mod` rather than a
+      hardcoded `numpy` import.  `campaign/template_scan.py` and
+      `campaign/track_a_scan.py` expose `--backend {cpu,gpu}`.
+- [x] VERIFIED WITHOUT REAL HARDWARE: a fake `cupy` module (NumPy under the
+      hood) was injected into `sys.modules` to exercise the `backend="gpu"`
+      code path end to end -- grid construction, imaginary/real time
+      stepping, energy, the L-BFGS-B minimiser, both vortex detectors, and
+      Helmholtz decomposition.  Every quantity matched the real CPU path to
+      EXACTLY zero difference (not just within tolerance), proving the
+      xp-threading has no missed hardcoded `np.` call that would silently
+      stay on CPU semantics.  This does NOT test real CUDA numerics or
+      timing; Cell 7 of the notebook is the honest, undone check against
+      real hardware, and states plainly that it was never run against one.
+- [ ] **NOT YET DONE: run Cell 7 against a real GPU.**  Speedup, real CUDA
+      numerical agreement (last-ULP differences from different reduction
+      order ARE expected there and must be distinguished from a real bug),
+      and the actual throughput floor from the per-iteration host<->device
+      transfer in the minimiser are all unmeasured until this happens.
+
+### Regression found and fixed: the notebook test harness was broken since v1.4
+- [x] **`test_notebook_cells.py` could not get past Cell 1 outside Colab,
+      for every version from v1.4 through v2.3.**  Cell 1's Drive-
+      persistence assertion (added in v1.4 to stop the ephemeral-storage
+      data-loss bug) correctly raises when no Google Drive is mounted --
+      which is ALWAYS the case outside Colab.  Nothing in the harness told
+      it this was expected.  During that whole span, "full notebook"
+      verification claims in this file were based on ad hoc per-cell exec
+      scripts that pre-injected `archive` as a global and skipped Cell 1
+      entirely -- not on running this sanctioned, sequential harness.  So
+      individual cells 2-6 WERE genuinely exercised each time, but the
+      claim of "verified end to end" for the complete cell-1-through-6
+      sequence had not actually been true since v1.3.
+      Fixed via an explicit, env-gated bypass (`QTSIM_SANDBOX_TEST=1`, set
+      only by this harness, never inferred) that overrides the
+      `persistent` flag without changing where files are written or
+      touching the real Colab code path at all.
+- [x] **Found while fixing it: Cell 1 had two separate, overlapping
+      persistence checks that were never consolidated** -- a raw
+      `assert archive.project_dir.startswith('/content/drive/MyDrive')`
+      (which hardcodes a literal path prefix and bypasses the `persistent`
+      abstraction entirely) alongside the correct, already-documented
+      `if not archive.persistent: raise RuntimeError(...)`.  These were
+      added in different edit passes and left duplicated.  The redundant,
+      path-hardcoded assert was removed; only the flag-based check remains.
+- [x] Fixed the SystemExit-crashes-the-harness bug this exposed: the
+      optional GPU cell (Cell 7) legitimately raises `SystemExit` when
+      CuPy is absent, and `SystemExit` is `BaseException`, not `Exception`
+      -- it would have escaped the harness's `except Exception:` and
+      killed the whole script uncontrolled rather than reporting a clean
+      skip.  The harness now catches `SystemExit` specifically for the
+      recognized optional cell and reports SKIPPED, distinct from PASS/FAIL.
+- [x] Full harness re-run end to end after all fixes, for the first time
+      since v1.3: **6/6 mandatory cells passed, 1 skipped (GPU, as
+      designed), exit code 0.**

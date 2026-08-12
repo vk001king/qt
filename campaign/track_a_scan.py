@@ -97,8 +97,8 @@ def parse_args():
     p.add_argument("--cells", type=int, default=12,
                    help="droplet cells across the box.  MATTERS: nv(R=1) = "
                         "cells^2*sqrt(3)/2, and a masked vortex count is only "
-                        "trustworthy above nv~20 (charge imbalance <5%).  "
-                        "cells=5 gives nv=5 at R=2 and the count is then 100% "
+                        "trustworthy above nv~20 (charge imbalance under 5pct). "
+                        "cells=5 gives nv=5 at R=2 and the count is then 100pct "
                         "charge-imbalanced -- useless on the R>1 side that H4' "
                         "needs.  cells=12 gives nv=31 at R=2, nv=14 at R=3.")
     p.add_argument("--dx", type=float, default=0.5,
@@ -111,6 +111,11 @@ def parse_args():
                    help="tiny smoke test: 2 drives, 1 seed, short times")
     p.add_argument("--outdir", type=str, default=None,
                    help="local output dir instead of Google Drive")
+    p.add_argument("--backend", type=str, default="cpu", choices=("cpu", "gpu"),
+                   help="'cpu' (NumPy, default) or 'gpu' (CuPy).  GPU must be "
+                        "requested explicitly; a request with no CuPy/GPU "
+                        "present raises rather than silently running on CPU. "
+                        "In Colab, install first: !pip install -q cupy-cuda12x")
     return p.parse_args()
 
 
@@ -137,13 +142,13 @@ def roton_scales(eps_dd, l_z, gamma):
     return k_rot, lam, 2 * lam / np.sqrt(3), float(inside[i])
 
 
-def build_grid(d, cells, dx):
+def build_grid(d, cells, dx, backend="cpu"):
     """Commensurate triangular box: Lx = cells*d, Ly = cells*d*sqrt(3)/2."""
     Lx = cells * d
     Ly = cells * d * np.sqrt(3) / 2
     Nx = max(64, int(round(Lx / dx / 2) * 2))
     Ny = max(64, int(round(Ly / dx / 2) * 2))
-    return Grid((Nx, Ny), (Lx, Ly))
+    return Grid((Nx, Ny), (Lx, Ly), backend=backend)
 
 
 def lattice_seed(grid, d, cells):
@@ -251,7 +256,7 @@ def run_point(archive, args, scales, Ma, seed):
     k_rot, lam, d, min_inside = scales
     tag = "trackA Ma%.2f seed%d eps%.3f" % (Ma, seed, args.eps_dd)
 
-    grid = build_grid(d, args.cells, args.dx)
+    grid = build_grid(d, args.cells, args.dx, backend=args.backend)
     area = float(np.prod(grid.lengths))
     gamma = gamma_tilde(args.eps_dd, args.n0_as3)
     Dk = quasi2d_dipolar_symbol(grid, args.l_z)
@@ -395,14 +400,15 @@ def main():
     print("=" * 66)
     print("TRACK A -- H4' frustration crossover (contradiction C8)")
     print("=" * 66)
-    print("eps_dd=%.3f  l_z=%.2f xi  gamma=%.5f" % (args.eps_dd, args.l_z, gamma))
+    print("eps_dd=%.3f  l_z=%.2f xi  gamma=%.5f  backend=%s"
+          % (args.eps_dd, args.l_z, gamma, args.backend))
     print("roton: k=%.4f  lambda=%.3f xi  droplet spacing d=%.3f xi"
           % (k_rot, lam, d))
     print("       min_inside=%.4f (unstable, crystal will form)" % min_inside)
     print("box: %d x %d cells" % (args.cells, args.cells))
     print("drives: %s" % args.drives)
     print("seeds : %s" % args.seeds)
-    grid0 = build_grid(d, args.cells, args.dx)
+    grid0 = build_grid(d, args.cells, args.dx, backend=args.backend)
     area0 = float(np.prod(grid0.lengths))
     nv1 = area0 / d ** 2
     print("grid: %d x %d, box %.1f x %.1f xi"

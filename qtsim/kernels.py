@@ -15,6 +15,8 @@ Small-x series (derived and checked in Phase 5C):
 from __future__ import annotations
 import numpy as np
 
+from .backend import get_backend, asnumpy, device_report
+
 
 class Grid:
     """Uniform periodic Cartesian grid in d dimensions.
@@ -23,9 +25,14 @@ class Grid:
     ----------
     shape : tuple[int]   grid points per dimension
     lengths : tuple[float]  box lengths per dimension (units of xi)
+    backend : "cpu" (default, NumPy) or "gpu" (CuPy).  See backend.py for
+        why this is explicit rather than auto-detected.  X, K, k2 live on
+        the selected backend; everything built from them (solver state,
+        diagnostics) follows automatically since they inherit dtype/device
+        from array operations on these fields.
     """
 
-    def __init__(self, shape, lengths):
+    def __init__(self, shape, lengths, backend: str = "cpu"):
         assert len(shape) == len(lengths)
         self.shape = tuple(shape)
         self.lengths = tuple(float(L) for L in lengths)
@@ -33,18 +40,36 @@ class Grid:
         self.dx = [L / n for n, L in zip(shape, lengths)]
         self.dV = float(np.prod(self.dx))
         self.Ntot = int(np.prod(shape))
+
+        self.xp, self.fft_mod, self.backend = get_backend(backend)
+        if self.backend == "gpu":
+            print(device_report(self.xp, self.backend))
+
+        # Coordinate construction uses plain NumPy (cheap, one-off, and
+        # fftfreq/linspace semantics are identical across backends) then
+        # moves to the selected device in one transfer.
         xs = [np.linspace(-L / 2, L / 2, n, endpoint=False)
               for n, L in zip(shape, lengths)]
         ks = [2 * np.pi * np.fft.fftfreq(n, d=L / n)
               for n, L in zip(shape, lengths)]
-        self.X = np.meshgrid(*xs, indexing="ij")
-        self.K = np.meshgrid(*ks, indexing="ij")
+        X_np = np.meshgrid(*xs, indexing="ij")
+        K_np = np.meshgrid(*ks, indexing="ij")
+        self.X = [self.xp.asarray(x) for x in X_np]
+        self.K = [self.xp.asarray(k) for k in K_np]
         self.k2 = sum(k * k for k in self.K)
 
     # --- integration helpers -------------------------------------------
     def integrate(self, f):
         """Riemann integral of real/complex field f over the box."""
         return f.sum() * self.dV
+
+    def asarray(self, x):
+        """Move a host (NumPy) array onto this grid's backend."""
+        return self.xp.asarray(x)
+
+    def to_host(self, x):
+        """Move an array on this grid's backend to a NumPy host array."""
+        return asnumpy(x)
 
 
 def bare_dipolar_symbol(grid: Grid, ehat) -> np.ndarray:
@@ -53,6 +78,11 @@ def bare_dipolar_symbol(grid: Grid, ehat) -> np.ndarray:
     ehat : polarization unit vector, len == grid.dim (for dim==2 the
            in-plane projection convention is the caller's responsibility;
            production quasi-2D kernels use the reduced form -- see FLAGS.md).
+
+    Built on the HOST (NumPy) and moved to the grid's backend in one
+    transfer at the end.  Kernel construction is a one-time cost per run
+    (unlike the FFT steps, which dominate runtime), so correctness and
+    avoiding scipy/CuPy interop issues matter far more here than speed.
     """
     e = np.asarray(ehat, dtype=float)
     if e.size != grid.dim:
@@ -65,12 +95,14 @@ def bare_dipolar_symbol(grid: Grid, ehat) -> np.ndarray:
                          "polarization axis. (Truncating (0,0,1) to 2D "
                          "gives (0,0) -- this was a live bug.)")
     e = e / nrm
-    kdote = sum(Ki * ei for Ki, ei in zip(grid.K, e))
+    K_host = [grid.to_host(Ki) for Ki in grid.K]
+    k2_host = grid.to_host(grid.k2)
+    kdote = sum(Ki * ei for Ki, ei in zip(K_host, e))
     with np.errstate(invalid="ignore", divide="ignore"):
-        cos2 = np.where(grid.k2 > 0, (kdote * kdote) / grid.k2, 0.0)
+        cos2 = np.where(k2_host > 0, (kdote * kdote) / k2_host, 0.0)
     D = 3.0 * cos2 - 1.0
-    D[grid.k2 == 0] = 0.0  # convention: uniform shift absorbed into mu
-    return D
+    D[k2_host == 0] = 0.0  # convention: uniform shift absorbed into mu
+    return grid.asarray(D)
 
 
 def truncation_bracket(x: np.ndarray) -> np.ndarray:
@@ -88,10 +120,13 @@ def truncation_bracket(x: np.ndarray) -> np.ndarray:
 
 
 def truncated_dipolar_symbol(grid: Grid, ehat, R: float) -> np.ndarray:
-    """Ronen-truncated symbol D_R(k) (Phase 5C Eq. 14); D_R(0)=0 exactly."""
-    D = bare_dipolar_symbol(grid, ehat)          # handles k=0 -> 0
-    x = np.sqrt(grid.k2) * R
-    return D * truncation_bracket(x)
+    """Ronen-truncated symbol D_R(k) (Phase 5C Eq. 14); D_R(0)=0 exactly.
+
+    Built on the host for the same reason as bare_dipolar_symbol above.
+    """
+    D_host = grid.to_host(bare_dipolar_symbol(grid, ehat))
+    x = np.sqrt(grid.to_host(grid.k2)) * R
+    return grid.asarray(D_host * truncation_bracket(x))
 
 
 # ---------------------------------------------------------------------------
@@ -160,17 +195,19 @@ def quasi2d_dipolar_symbol(grid: Grid, l_z: float) -> np.ndarray:
 
     Unlike `bare_dipolar_symbol`, this carries a roton structure and can
     therefore support a genuine droplet crystal.  Requires a 2D grid.
+    Built on the host, then moved to the grid's backend once.
     """
     if grid.dim != 2:
         raise ValueError("quasi2d_dipolar_symbol requires a 2D grid; "
                          f"got dim={grid.dim}")
     if l_z <= 0:
         raise ValueError("l_z must be positive")
-    return quasi2d_dipolar_profile(np.sqrt(grid.k2), l_z)
+    k2_host = grid.to_host(grid.k2)
+    return grid.asarray(quasi2d_dipolar_profile(np.sqrt(k2_host), l_z))
 
 
 def bogoliubov_omega(grid: Grid, n0: float, eps_dd: float, gamma: float,
-                     Dk: np.ndarray) -> np.ndarray:
+                     Dk) -> np.ndarray:
     """Bogoliubov frequency omega(k) about a uniform state of density n0.
 
     In the dimensionless units of this package (kinetic operator -Lap):
@@ -178,10 +215,15 @@ def bogoliubov_omega(grid: Grid, n0: float, eps_dd: float, gamma: float,
     The LHY contribution follows from 2 n0 d(mu_LHY)/dn = 3 gamma n0^{3/2}
     with mu_LHY = gamma n^{3/2}.  Returns NaN where omega^2 < 0 (dynamically
     unstable), which is the signature of a roton instability.
+
+    Diagnostic-only (never in the per-step hot path): always computed and
+    returned on the HOST as a plain NumPy array, regardless of the grid's
+    backend, so it can be plotted directly.
     """
-    inside = (grid.k2 + 2.0 * n0 * (1.0 + eps_dd * Dk)
-              + 3.0 * gamma * n0 ** 1.5)
-    w2 = grid.k2 * inside
+    k2 = grid.to_host(grid.k2)
+    Dk_h = grid.to_host(Dk)
+    inside = k2 + 2.0 * n0 * (1.0 + eps_dd * Dk_h) + 3.0 * gamma * n0 ** 1.5
+    w2 = k2 * inside
     out = np.full_like(w2, np.nan)
     ok = w2 >= 0
     out[ok] = np.sqrt(w2[ok])
@@ -189,18 +231,20 @@ def bogoliubov_omega(grid: Grid, n0: float, eps_dd: float, gamma: float,
 
 
 def roton_wavevector(grid: Grid, n0: float, eps_dd: float, gamma: float,
-                     Dk: np.ndarray):
+                     Dk):
     """Locate the roton: (k_rot, omega_rot, is_unstable).
 
     k_rot is the wavenumber minimizing omega(k) over k > 0.  When
     omega^2 < 0 somewhere, k_rot is taken at the most negative omega^2 and
     is_unstable is True -- the uniform state then decays into a crystal
-    with lattice period ~ 2 pi / k_rot.
+    with lattice period ~ 2 pi / k_rot.  Diagnostic-only: computed on the
+    host regardless of backend.
     """
-    inside = (grid.k2 + 2.0 * n0 * (1.0 + eps_dd * Dk)
-              + 3.0 * gamma * n0 ** 1.5)
-    w2 = grid.k2 * inside
-    mask = grid.k2 > 0
+    k2 = grid.to_host(grid.k2)
+    Dk_h = grid.to_host(Dk)
+    inside = k2 + 2.0 * n0 * (1.0 + eps_dd * Dk_h) + 3.0 * gamma * n0 ** 1.5
+    w2 = k2 * inside
+    mask = k2 > 0
     if np.nanmin(w2[mask]) < 0:
         idx = np.argmin(np.where(mask, w2, np.inf))
         unstable = True
@@ -208,7 +252,7 @@ def roton_wavevector(grid: Grid, n0: float, eps_dd: float, gamma: float,
         idx = np.argmin(np.where(mask, w2, np.inf))
         unstable = False
     i = np.unravel_index(idx, w2.shape)
-    k_rot = float(np.sqrt(grid.k2[i]))
+    k_rot = float(np.sqrt(k2[i]))
     w2r = float(w2[i])
     om = float(np.sqrt(w2r)) if w2r >= 0 else float('nan')
     return k_rot, om, unstable

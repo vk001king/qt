@@ -33,33 +33,51 @@ objective the chain rule adds the radial component removal
     grad_proj = (grad - (Re<psi_hat, grad> / N) psi_hat) * sqrt(N)/||psi||,
 which is the tangential part.  Real and imaginary parts are packed into a
 single real vector for scipy.
+
+BACKEND.  `scipy.optimize.minimize` is CPU-only, so the packed vector
+handed to it is always a host (NumPy) array.  Everything expensive --
+FFTs, the nonlinear terms, the energy functional -- runs through
+`solver.g.xp`/`solver.g.fft_mod`, i.e. on the GPU when the solver's grid
+was built with `backend="gpu"`.  `_unpack` moves the host vector onto the
+solver's device before evaluating the objective; `_pack` moves the
+resulting device gradient back to host.  This means one host<->device
+transfer per L-BFGS-B iteration, which is now the throughput floor for
+this minimiser on GPU -- stated plainly rather than hidden, since it means
+the GPU speedup here is real but smaller than for step_real/step_imag,
+which never leave the device.
 """
 from __future__ import annotations
 
 import numpy as np
 
+from .backend import asnumpy
 from .kernels import Grid
 from .solver import EGPESolver
 
-_fft, _ifft = np.fft.fftn, np.fft.ifftn
-
 
 def _pack(psi):
-    return np.concatenate([psi.real.ravel(), psi.imag.ravel()])
+    """Device array -> packed real NumPy vector (host), for scipy."""
+    psi_h = asnumpy(psi)
+    return np.concatenate([psi_h.real.ravel(), psi_h.imag.ravel()])
 
 
-def _unpack(x, shape):
+def _unpack(x, shape, xp):
+    """Packed real NumPy vector (host) -> complex array on backend `xp`."""
     half = x.size // 2
-    return (x[:half].reshape(shape) + 1j * x[half:].reshape(shape))
+    psi_h = (x[:half].reshape(shape) + 1j * x[half:].reshape(shape))
+    return xp.asarray(psi_h)
 
 
 def energy_and_gradient(solver: EGPESolver, psi, N_target: float):
     """Projected energy and its gradient in packed real form.
 
     Returns (E, grad_packed) with the norm constraint handled by rescaling.
+    `psi` is expected to already be on the solver's backend (device); the
+    returned gradient is packed to host by `_pack`.
     """
     g = solver.g
-    nrm2 = float(g.integrate(np.abs(psi) ** 2))
+    xp = g.xp
+    nrm2 = float(g.integrate(xp.abs(psi) ** 2))
     scale = np.sqrt(N_target / nrm2)
     ph = psi * scale                      # on the constraint manifold
 
@@ -70,7 +88,7 @@ def energy_and_gradient(solver: EGPESolver, psi, N_target: float):
     solver.psi = saved
 
     # tangential projection, then chain rule for the rescaling
-    overlap = float(np.real(g.integrate(np.conj(ph) * Hp)))
+    overlap = float(xp.real(g.integrate(xp.conj(ph) * Hp)))
     grad = (Hp - (overlap / N_target) * ph) * scale
     return float(E), _pack(grad * g.dV * 2.0)
 
@@ -87,12 +105,13 @@ def minimize_energy(solver: EGPESolver, N_target: float | None = None,
     from scipy.optimize import minimize as _sp_min
 
     g = solver.g
+    xp = g.xp
     if N_target is None:
         N_target = solver.norm()
     shape = g.shape
 
     def fun(x):
-        psi = _unpack(x, shape)
+        psi = _unpack(x, shape, xp)
         E, grad = energy_and_gradient(solver, psi, N_target)
         return E, grad
 
@@ -101,8 +120,8 @@ def minimize_energy(solver: EGPESolver, N_target: float | None = None,
                   options=dict(maxiter=maxiter, maxfun=4 * maxiter,
                                ftol=ftol, gtol=gtol))
 
-    psi = _unpack(res.x, shape)
-    psi *= np.sqrt(N_target / float(g.integrate(np.abs(psi) ** 2)))
+    psi = _unpack(res.x, shape, xp)
+    psi = psi * xp.sqrt(N_target / float(g.integrate(xp.abs(psi) ** 2)))
     solver.psi = psi
     mu, residual = solver.mu_and_residual()
     out = dict(energy=solver.energy()["total"], mu=mu, residual=residual,
@@ -136,16 +155,18 @@ def multistart_ground_state(grid: Grid, eps_dd: float, gamma: float,
     for i in range(n_seeds):
         s = EGPESolver(grid, eps_dd=eps_dd, gamma=gamma, Dk=Dk)
         if i == 0 and lattice_seed is not None:
-            s.psi = np.asarray(lattice_seed(grid), dtype=complex)
+            seed_host = np.asarray(lattice_seed(grid), dtype=complex)
+            s.psi = grid.asarray(seed_host)
             label = "lattice"
         else:
             rng = np.random.default_rng(seed0 + 1000 * i)
             amp = 0.02 * (1 + i)          # vary the seed strength too
-            s.psi = (np.ones(grid.shape, dtype=complex)
-                     + amp * (rng.standard_normal(grid.shape)
-                              + 1j * rng.standard_normal(grid.shape)))
+            seed_host = (np.ones(grid.shape, dtype=complex)
+                        + amp * (rng.standard_normal(grid.shape)
+                                + 1j * rng.standard_normal(grid.shape)))
+            s.psi = grid.asarray(seed_host)
             label = f"noise(a={amp:.2f})"
-        s.psi *= np.sqrt(N_target / s.norm())
+        s.psi = s.psi * np.sqrt(N_target / s.norm())
         s.step_imag(0.002, presmooth, norm_target=N_target)
         info = minimize_energy(s, N_target, maxiter=maxiter, verbose=False)
         if verbose:

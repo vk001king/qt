@@ -4,17 +4,37 @@
 vortex).  The Helmholtz split acts on w = sqrt(n) v (Phase 5B III.E) and is
 orthogonal on the periodic grid by Parseval, so
 E_kin,total(w) = E_i + E_c holds to round-off (asserted in tests).
+
+BACKEND.  Functions that receive a `grid` argument use `grid.xp` and
+`grid.fft_mod`, matching kernels.py and solver.py.  A few functions here
+(`plaquette_charges_2d`, `circulation_loop_2d`'s angle step) take only
+`psi` with no grid, since they are called that way throughout the
+notebook and campaign scripts; for those, `_xp_of(psi)` duck-types the
+array's own module so the right backend is used without changing any
+call site.  On the default CPU backend this is identical to before the
+GPU port -- `_xp_of` returns plain NumPy for a NumPy array.
 """
 from __future__ import annotations
 import numpy as np
 from .kernels import Grid
 
-_fft, _ifft = np.fft.fftn, np.fft.ifftn
+
+def _xp_of(arr):
+    """Return (xp, fft_module) matching the array's own backend.
+
+    Duck-types on the array's module name rather than importing CuPy
+    unconditionally, so this file has no hard CuPy dependency.
+    """
+    mod = type(arr).__module__.split(".")[0]
+    if mod == "cupy":
+        import cupy as cp
+        return cp, cp.fft
+    return np, np.fft
 
 
-def _wrap(a):
+def _wrap(a, xp=np):
     """Wrap angle array to (-pi, pi]."""
-    return (a + np.pi) % (2 * np.pi) - np.pi
+    return (a + xp.pi) % (2 * xp.pi) - xp.pi
 
 
 def plaquette_charges_2d(psi):
@@ -24,26 +44,28 @@ def plaquette_charges_2d(psi):
     (higher charges would appear as adjacent unit charges at our
     resolutions; multiply-quantized cores are unstable anyway).
     """
-    th = np.angle(psi)
-    d1 = _wrap(np.roll(th, -1, 0) - th)                       # right edge up
-    d2 = _wrap(np.roll(np.roll(th, -1, 0), -1, 1)
-               - np.roll(th, -1, 0))                          # top edge
-    d3 = _wrap(np.roll(th, -1, 1) - np.roll(np.roll(th, -1, 0), -1, 1))
-    d4 = _wrap(th - np.roll(th, -1, 1))
+    xp, _ = _xp_of(psi)
+    th = xp.angle(psi)
+    d1 = _wrap(xp.roll(th, -1, 0) - th, xp)                   # right edge up
+    d2 = _wrap(xp.roll(xp.roll(th, -1, 0), -1, 1)
+               - xp.roll(th, -1, 0), xp)                      # top edge
+    d3 = _wrap(xp.roll(th, -1, 1) - xp.roll(xp.roll(th, -1, 0), -1, 1), xp)
+    d4 = _wrap(th - xp.roll(th, -1, 1), xp)
     # Orientation verified by a minimal single-vortex probe (see
     # VALIDATION_REPORT): the edge terms d1..d4 equal the hand-computed
     # CCW differences (B-A, C-B, D-C, A-D) exactly, so the raw sum is
     # already counter-clockwise / right-handed.  (An earlier negation
     # here, added on a wrong clockwise diagnosis, inverted all charges
     # and was removed after the probe.)
-    w = (d1 + d2 + d3 + d4) / (2 * np.pi)
-    return np.rint(w).astype(int)
+    w = (d1 + d2 + d3 + d4) / (2 * xp.pi)
+    return xp.rint(w).astype(int)
 
 
 def circulation_loop_2d(psi, grid: Grid, center, radius):
     """Circulation (units of 2*pi) around a square loop of half-side
     `radius` centered at `center` (grid units), via wrapped phase sums."""
-    th = np.angle(psi)
+    xp, _ = _xp_of(psi)
+    th = xp.angle(psi)
     i0 = int(round((center[0] + grid.lengths[0] / 2) / grid.dx[0]))
     j0 = int(round((center[1] + grid.lengths[1] / 2) / grid.dx[1]))
     r = int(round(radius / grid.dx[0]))
@@ -55,7 +77,7 @@ def circulation_loop_2d(psi, grid: Grid, center, radius):
     for i in range(r, -r, -1): path.append((((i0 + i) % n0), (j0 - r) % n1))
     tot = 0.0
     for (a, b), (c, d) in zip(path, path[1:] + path[:1]):
-        tot += _wrap(th[c, d] - th[a, b])
+        tot += float(_wrap(th[c, d] - th[a, b], xp))
     # The four-segment path (bottom→right→top→left) traverses CLOCKWISE
     # in the (i,j)=(x,y) convention used by arctan2.  Single-vortex probe
     # confirmed: raw sum = -1 for a known +1 vortex.  Negate to match
@@ -70,30 +92,37 @@ def helmholtz_split_2d(psi, grid: Grid, floor=1e-12):
     v = 2*Im(psi* grad psi)/n in these units (since v = 2*grad(phase) when
     lengths are in xi and the kinetic operator is -Lap).
     """
-    n = np.abs(psi) ** 2
+    xp = grid.xp
+    fft, ifft = grid.fft_mod.fftn, grid.fft_mod.ifftn
+    n = xp.abs(psi) ** 2
     ws = []
-    psik = _fft(psi)
+    psik = fft(psi)
     for Ki in grid.K:
-        dpsi = _ifft(1j * Ki * psik)
+        dpsi = ifft(1j * Ki * psik)
         # sqrt(n) v_i = 2*Im(conj(psi) dpsi)/sqrt(n)
-        ws.append(2.0 * np.imag(np.conj(psi) * dpsi)
-                  / np.sqrt(np.maximum(n, floor)))
-    wk = [_fft(w) for w in ws]
-    k2 = np.maximum(grid.k2, 1e-30)
+        ws.append(2.0 * xp.imag(xp.conj(psi) * dpsi)
+                  / xp.sqrt(xp.maximum(n, floor)))
+    wk = [fft(w) for w in ws]
+    k2 = xp.maximum(grid.k2, 1e-30)
     kdotw = sum(Ki * wki for Ki, wki in zip(grid.K, wk))
     Ei = Ec = 0.0
     for Ki, wki in zip(grid.K, wk):
         wc = Ki * kdotw / k2          # longitudinal (compressible) part
-        wc[grid.k2 == 0] = 0.0
+        wc = xp.where(grid.k2 == 0, 0.0, wc)
         wi = wki - wc
-        Ei += float(np.sum(np.abs(wi) ** 2))
-        Ec += float(np.sum(np.abs(wc) ** 2))
+        Ei += float(xp.sum(xp.abs(wi) ** 2))
+        Ec += float(xp.sum(xp.abs(wc) ** 2))
     scale = grid.dV / grid.Ntot       # Parseval normalization
     return Ei * scale, Ec * scale, (Ei + Ec) * scale
 
 
 def _annulus_kernel(grid: Grid, r_in: float, r_out: float):
-    """Normalized annulus mask in Fourier space, for fast local averaging."""
+    """Normalized annulus mask in Fourier space, for fast local averaging.
+
+    Built on the host (one-time per grid, cheap) then moved to the grid's
+    backend, matching the pattern used for kernel construction in
+    kernels.py.
+    """
     xs = [np.fft.fftshift(np.arange(n) - n // 2) * d
           for n, d in zip(grid.shape, grid.dx)]
     R = np.sqrt(sum(x ** 2 for x in np.meshgrid(*xs, indexing="ij")))
@@ -101,7 +130,8 @@ def _annulus_kernel(grid: Grid, r_in: float, r_out: float):
     tot = m.sum()
     if tot == 0:
         raise ValueError("annulus contains no grid points; widen r_in..r_out")
-    return _fft(m / tot)
+    m_dev = grid.asarray(m / tot)
+    return grid.fft_mod.fftn(m_dev)
 
 
 def plaquette_charges_2d_masked(psi, grid: Grid, r_in: float = 0.5,
@@ -137,13 +167,23 @@ def plaquette_charges_2d_masked(psi, grid: Grid, r_in: float = 0.5,
     INTERFACE, where the annulus straddles both and the classification is
     genuinely ambiguous -- no parameter choice removes them.
 
-    SYSTEMATIC UNCERTAINTY ON L.  On a stirred quasi-2D droplet crystal
-    the count was 874 raw, 724 with this annulus mask (-17 percent), and
-    459 with a cruder all-corners density mask (-47 percent).  Vortex
-    line density in a droplet crystal therefore carries a METHOD-DEPENDENT
-    SYSTEMATIC of order 20-50 percent.  Since L is the primary observable
-    for the decay-law and avalanche analyses, that systematic must be
-    quoted alongside L rather than a single number being reported.
+    SYSTEMATIC UNCERTAINTY ON L, measured on a real stirred campaign run
+    (not just the fluid/void control): rejection fraction was 90%, 75%,
+    54%, 35% at four successive times as the tangle grew, and raw and
+    masked counts grow at DIFFERENT RATES (2.8x vs 18x over that run), so
+    a raw L(t) has the wrong SHAPE, not merely an offset.  L in a droplet
+    crystal therefore carries a large, time-dependent, method-dependent
+    systematic that must be quoted, never treated as a clean number.
+
+    MASK QUALITY GATE.  True total circulation is exactly zero in a
+    periodic box, and the raw plaquette count respects that identically.
+    Because the mask is spatial, it can clip one sign preferentially near
+    a fluid/void interface, breaking neutrality; the residual net charge
+    on the masked count is therefore the only internal check available on
+    the mask itself, and is returned as `charge_imbalance` /
+    `mask_trustworthy`.  Measured: imbalance fell 14% -> 11% -> 2% -> 0.8%
+    as nv grew 14 -> 250 -- the mask is LEAST trustworthy exactly where
+    there are fewest vortices, which is the R>1 side of the H4' scan.
 
     Returns
     -------
@@ -151,26 +191,19 @@ def plaquette_charges_2d_masked(psi, grid: Grid, r_in: float = 0.5,
     """
     if grid.dim != 2:
         raise ValueError("plaquette_charges_2d_masked requires a 2D grid")
+    xp = grid.xp
+    fft, ifft = grid.fft_mod.fftn, grid.fft_mod.ifftn
     q = plaquette_charges_2d(psi)
-    n = np.abs(psi) ** 2
+    n = xp.abs(psi) ** 2
     ann = _annulus_kernel(grid, r_in, r_out)
-    n_ann = _ifft(ann * _fft(n)).real          # annulus-averaged density
+    n_ann = ifft(ann * fft(n)).real          # annulus-averaged density
     keep = n_ann > frac * n.mean()
-    q_m = np.where(keep, q, 0)
+    q_m = xp.where(keep, q, 0)
     if not return_stats:
         return q_m
     raw = int((q != 0).sum())
     kept = int((q_m != 0).sum())
     net = int((q_m == 1).sum() - (q_m == -1).sum())
-    # MASK QUALITY GATE.  True total circulation is exactly zero in a
-    # periodic box, and the RAW plaquette count respects that identically.
-    # The mask is spatial, so it can clip one sign preferentially near a
-    # fluid/void interface and break neutrality.  The residual net charge
-    # therefore measures how badly the mask is mis-clipping, and is the only
-    # internal check available on it.
-    # Measured on a stirred crystal: |net|/kept fell 14% -> 11% -> 2% ->
-    # 0.8% as the vortex count grew 14 -> 74 -> 147 -> 250, i.e. the mask is
-    # LEAST trustworthy exactly when there are fewest vortices.
     imbalance = abs(net) / kept if kept else 0.0
     stats = dict(raw=raw, kept=kept,
                  rejected=raw - kept,

@@ -157,7 +157,26 @@ class Archive:
         self.index_path = os.path.join(self.project_dir, INDEX_NAME)
         self._ensure_index(verbose)
         print(f"Archive ready: {self.project_dir}")
-        if root is None and not getattr(self, "persistent", False):
+
+        # Sandbox/CI override.  MUST be explicitly requested by an
+        # environment variable, never inferred -- same "explicit, not
+        # automatic" rule as backend selection (see backend.py) and the
+        # same rule that the earlier silent-fallback-to-ephemeral-disk bug
+        # taught the hard way (see FLAGS.md, v1.4).  This flag exists
+        # solely so automated tests (test_notebook_cells.py) that run
+        # outside Colab -- where no Google Drive can ever be mounted --
+        # can exercise the REST of the notebook logic without the
+        # persistence assertion halting them at cell 1.  It does NOT
+        # change self.root or where files are written; it only overrides
+        # the `persistent` flag that callers check.  A real user must
+        # never set this.
+        if os.environ.get("QTSIM_SANDBOX_TEST") == "1":
+            print("  !! QTSIM_SANDBOX_TEST=1: persistence check bypassed "
+                  "for automated testing only -- files still land at the "
+                  "path above, NOT on Google Drive. Never set this "
+                  "variable in a real Colab session.")
+            self.persistent = True
+        elif root is None and not getattr(self, "persistent", False):
             try:
                 import google.colab  # noqa: F401
                 print("  !! NOT on Google Drive -- outputs are EPHEMERAL "

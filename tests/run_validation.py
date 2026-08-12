@@ -542,12 +542,84 @@ def t11_vortex_detection_in_voids():
            "both == 2", q_raw == 2 and q_msk == 2)
 
 
+# ---------------------------------------------------------------- T12
+def t12_backend_selection():
+    """Explicit backend selection (qtsim/backend.py, the GPU port).
+
+    Every array operation in kernels.py, solver.py, diagnostics.py, and
+    minimize.py now goes through grid.xp / grid.fft_mod rather than a
+    hardcoded numpy import, so Grid(..., backend='gpu') can run on CuPy.
+    Selection is EXPLICIT and a failed GPU request RAISES rather than
+    silently running on CPU -- the same class of bug already fixed once
+    for Google Drive persistence (a silent fallback there destroyed a
+    full session's results with no warning).  This sandbox has no GPU, so
+    only the CPU path and the loud-failure guarantee can be exercised
+    here; the CPU path itself must remain byte-identical to before the
+    port, which T1-T11 above already establish by continuing to pass.
+    """
+    from qtsim.backend import get_backend
+
+    record("T12a default backend is cpu", f"{Grid((8,8),(4.,4.)).backend!r}",
+           "'cpu'", Grid((8, 8), (4.0, 4.0)).backend == "cpu")
+
+    invalid_raised = False
+    try:
+        Grid((8, 8), (4.0, 4.0), backend="tpu")
+    except ValueError:
+        invalid_raised = True
+    record("T12b invalid backend name rejected", f"raised={invalid_raised}",
+           "ValueError raised", invalid_raised)
+
+    # The critical safety property: gpu request with no CuPy/GPU present
+    # must RAISE, never silently continue on CPU.
+    gpu_raised, gpu_is_runtime_error = False, False
+    try:
+        get_backend("gpu")
+    except RuntimeError:
+        gpu_raised = True
+        gpu_is_runtime_error = True
+    except Exception:
+        gpu_raised = True
+    record("T12c GPU-unavailable request raises (never silent fallback)",
+           f"raised={gpu_raised}, RuntimeError={gpu_is_runtime_error}",
+           "raises RuntimeError", gpu_raised and gpu_is_runtime_error)
+
+    # Full pipeline on the explicit backend path: kernel + solver +
+    # minimiser + masked diagnostics together, matching how a real run
+    # exercises the code (not just isolated unit calls).
+    from qtsim.lhy import gamma_tilde
+    from qtsim.kernels import quasi2d_dipolar_symbol
+    from qtsim.diagnostics import plaquette_charges_2d_masked
+    from qtsim.minimize import minimize_energy
+
+    g = Grid((64, 64), (32.0, 32.0), backend="cpu")
+    gam = gamma_tilde(1.414, 1.17e-4)
+    Dk = quasi2d_dipolar_symbol(g, 8.6)
+    s = EGPESolver(g, eps_dd=1.414, gamma=gam, Dk=Dk)
+    rng = np.random.default_rng(2)
+    s.psi = (np.ones(g.shape, dtype=complex)
+            + 0.03 * (rng.standard_normal(g.shape)
+                     + 1j * rng.standard_normal(g.shape)))
+    Nt = float(g.integrate(np.ones(g.shape)))
+    s.psi *= np.sqrt(Nt / s.norm())
+    s.step_imag(0.002, 300, norm_target=Nt)
+    info = minimize_energy(s, Nt, maxiter=300, verbose=False)
+    _, stats = plaquette_charges_2d_masked(s.psi, g, return_stats=True)
+    ok = (info["residual"] < 1.0 and np.isfinite(info["mu"])
+         and "kept" in stats)
+    record("T12d full pipeline on explicit backend='cpu'",
+           f"mu={info['mu']:.4f}, residual={info['residual']:.2e}, "
+           f"masked_vortices={stats['kept']}",
+           "finite mu, finite residual, diagnostics run", ok)
+
+
 if __name__ == "__main__":
     t_start = time.time()
     for t in (t1_plane_wave, t2_order, t3_thomas_fermi, t4_q5,
               t5_kernels, t6_vortex, t7_long_time_stability,
               t8_quasi2d_kernel, t9_conservation_laws,
-              t10_minimizer, t11_vortex_detection_in_voids):
+              t10_minimizer, t11_vortex_detection_in_voids,
+              t12_backend_selection):
         t()
     npass = sum(1 for *_, p in RESULTS if p)
     print(f"\n== {npass}/{len(RESULTS)} checks passed "
@@ -557,6 +629,8 @@ if __name__ == "__main__":
         json.dump([{ "name": n, "value": v, "criterion": c, "pass": p}
                    for n, v, c, p in RESULTS], f, indent=1)
     sys.exit(0 if npass == len(RESULTS) else 1)
+
+
 
 
 
