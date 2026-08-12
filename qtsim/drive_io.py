@@ -319,12 +319,24 @@ class Run:
     # -- saving ----------------------------------------------------------
     def save_checkpoint(self, psi, step: int, t: float, extra: dict | None = None,
                         verbose: bool = True) -> str:
-        """Save the wavefunction with step number and simulation time."""
+        """Save the wavefunction with step number and simulation time.
+
+        BUG FIX (v2.5): `np.savez_compressed` requires a literal host
+        NumPy array; passing a CuPy array (backend="gpu") directly failed.
+        This bug was NOT caught by the fake-cupy verification in v2.4,
+        because that fake module's arrays WERE real numpy arrays under
+        the hood, so `isinstance(x, np.ndarray)`-style checks and
+        numpy-only functions like `savez_compressed` never saw a foreign
+        type there -- a real limitation of that verification method,
+        stated plainly rather than left implied.  Converts `psi` to host
+        explicitly before saving, regardless of backend.
+        """
         import numpy as np
+        from .backend import asnumpy
         stamp = datetime.now().strftime("%H%M%S")
         fname = self.path("checkpoints",
                           f"ckpt_step{int(step):08d}_t{t:09.2f}_{stamp}.npz")
-        payload = {"psi": psi, "step": int(step), "t": float(t),
+        payload = {"psi": asnumpy(psi), "step": int(step), "t": float(t),
                    "wall_clock": datetime.now().isoformat(timespec="seconds")}
         if extra:
             payload.update({k: v for k, v in extra.items()

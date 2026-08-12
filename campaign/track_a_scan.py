@@ -152,20 +152,34 @@ def build_grid(d, cells, dx, backend="cpu"):
 
 
 def lattice_seed(grid, d, cells):
-    """Ideal triangular droplet lattice, tiled with periodic images."""
+    """Ideal triangular droplet lattice, tiled with periodic images.
+
+    BUG FIX (v2.5): this function was written before the GPU backend
+    existed and built `dens` as a plain host NumPy array, then accumulated
+    Gaussian bumps computed from `grid.X` -- which is a CuPy array on
+    `backend="gpu"`.  Mixing a host `np.ndarray` into an in-place `+=` with
+    a CuPy operand raises `TypeError: Unsupported type <class
+    'numpy.ndarray'>`: CuPy deliberately refuses silent host/device
+    mixing rather than doing something slow or wrong.  Fixed by building
+    entirely on the HOST with plain NumPy (cheap, one-time, and identical
+    across backends) and moving to the grid's backend in a single transfer
+    at the end -- the same pattern already used in kernels.py for kernel
+    construction.
+    """
     b1 = np.array([d, 0.0])
     b2 = np.array([d / 2, d * np.sqrt(3) / 2])
     Lx, Ly = grid.lengths
+    X_host = [grid.to_host(Xi) for Xi in grid.X]
     dens = np.zeros(grid.shape)
     for i in range(-1, cells + 2):
         for j in range(-1, cells + 2):
             c = i * b1 + j * b2
             for sx in (-Lx, 0.0, Lx):
                 for sy in (-Ly, 0.0, Ly):
-                    dens += np.exp(-((grid.X[0] - c[0] - sx) ** 2
-                                     + (grid.X[1] - c[1] - sy) ** 2)
+                    dens += np.exp(-((X_host[0] - c[0] - sx) ** 2
+                                     + (X_host[1] - c[1] - sy) ** 2)
                                    / (2 * 1.2 ** 2))
-    return 0.05 + dens
+    return grid.asarray(0.05 + dens)
 
 
 def make_stirrers(grid, mu, Ma, n_stir=1, sigma=3.0, V0_factor=1.5):
@@ -179,14 +193,18 @@ def make_stirrers(grid, mu, Ma, n_stir=1, sigma=3.0, V0_factor=1.5):
     radius = 0.3 * min(grid.lengths)
     omega = Ma * np.sqrt(2.0) / radius
     angles0 = np.linspace(0, 2 * np.pi, n_stir, endpoint=False)
+    xp = grid.xp
 
     def V_stir(t):
-        V = np.zeros(grid.shape)
+        """Called every timestep -- this IS the hot path GPU is meant to
+        accelerate, so unlike lattice_seed (a one-time cost) this stays
+        entirely on `grid.xp`/device with NO host round trip per call."""
+        V = xp.zeros(grid.shape)
         for a0 in angles0:
             a = a0 + omega * t
-            xc, yc = radius * np.cos(a), radius * np.sin(a)
+            xc, yc = radius * np.cos(a), radius * np.sin(a)  # host scalars
             r2 = (grid.X[0] - xc) ** 2 + (grid.X[1] - yc) ** 2
-            V += V0 * np.exp(-r2 / (2 * sigma ** 2))
+            V = V + V0 * xp.exp(-r2 / (2 * sigma ** 2))
         return V
 
     return V_stir, V0, radius
@@ -202,7 +220,10 @@ def sample(solver, grid, t, d, area):
     L = nv / area                      # areal vortex density
     ell = 1.0 / np.sqrt(L) if L > 0 else float("inf")
     Ei, Ec, _ = helmholtz_split_2d(solver.psi, grid)
-    n = np.abs(solver.psi) ** 2
+    # grid.xp.abs (not global np.abs) for consistency with the rest of the
+    # backend-aware code, rather than relying on CuPy's __array_function__
+    # dispatch of top-level numpy calls, which is a real but implicit path.
+    n = grid.xp.abs(solver.psi) ** 2
     return dict(t=float(t), nv=nv, nv_raw=nv_raw, net_charge=net,
                 L=float(L), ell=float(ell), R=float(ell / d),
                 mask_reject=float(mst["reject_fraction"]),
@@ -279,15 +300,25 @@ def run_point(archive, args, scales, Ma, seed):
     solver.psi *= np.sqrt(Nt / solver.norm())
     solver.step_imag(0.002, 1500, norm_target=Nt)
     info = minimize_energy(solver, Nt, maxiter=1500, verbose=False)
-    n = np.abs(solver.psi) ** 2
+    n = grid.xp.abs(solver.psi) ** 2
     contrast = float((n.max() - n.min()) / n.mean())
     print("    ground state: mu=%.5f residual=%.2e contrast=%.3f"
           % (info["mu"], info["residual"], contrast), flush=True)
 
-    # phase noise so different seeds explore different tangles
+    # Phase noise so different seeds explore different tangles.
+    #
+    # BUG FIX (v2.5): rng.standard_normal() always returns a plain host
+    # NumPy array regardless of backend (NumPy's RNG has no CuPy
+    # equivalent used here), and the old code multiplied `solver.psi`
+    # (a full CuPy array on backend="gpu") in place by that host array --
+    # the same host/device mixing error as lattice_seed and make_stirrers
+    # above.  Generate the noise on the host (cheap, one-time, RNG
+    # semantics must stay host-side for reproducibility anyway) then move
+    # it to the grid's backend in one transfer before multiplying.
     rng = np.random.default_rng(seed)
-    solver.psi *= np.exp(1j * 0.02 * rng.standard_normal(grid.shape))
-    solver.psi *= np.sqrt(Nt / solver.norm())
+    noise_host = np.exp(1j * 0.02 * rng.standard_normal(grid.shape))
+    solver.psi = solver.psi * grid.asarray(noise_host)
+    solver.psi = solver.psi * np.sqrt(Nt / solver.norm())
 
     n_stir = args.n_stir if args.n_stir > 0 else max(1, args.cells // 3)
     V_stir, V0, radius = make_stirrers(grid, info["mu"], Ma, n_stir=n_stir,
@@ -306,7 +337,10 @@ def run_point(archive, args, scales, Ma, seed):
             r["phase"] = "stir"
             recs.append(r)
 
-    solver.V = np.zeros(grid.shape)
+    # BUG FIX (v2.5): same host/device mixing error -- solver.V feeds
+    # directly into _W(n) = self.V + n + ... where n is device-resident,
+    # so a plain host np.zeros() here raised the same TypeError on gpu.
+    solver.V = grid.xp.zeros(grid.shape)
     E0, N0 = solver.energy()["total"], solver.norm()
     r = sample(solver, grid, t, d, area)
     r["phase"] = "decay_start"

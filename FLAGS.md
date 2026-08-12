@@ -422,3 +422,82 @@ not abstract-only as in Phase 1.
 - [x] Full harness re-run end to end after all fixes, for the first time
       since v1.3: **6/6 mandatory cells passed, 1 skipped (GPU, as
       designed), exit code 0.**
+
+## v2.5: REAL GPU CRASH ON COLAB, FIXED -- track_a_scan.py was never ported
+
+The user ran `python campaign/track_a_scan.py --backend gpu` on a real T4
+in Colab.  Every genuinely new parameter point failed identically:
+`TypeError: Unsupported type <class 'numpy.ndarray'>`.  Root cause:
+`campaign/track_a_scan.py` (and one line of `qtsim/drive_io.py`) were
+written before the GPU backend existed and were never updated when it was
+added in v2.4 -- `qtsim/kernels.py`, `solver.py`, `diagnostics.py`, and
+`minimize.py` were all correctly ported, but the campaign SCRIPT that
+actually drives the H4' experiment was not audited.  This is exactly the
+class of gap the v2.4 fake-cupy verification could not catch, because that
+verification exercised the PACKAGE, not the CAMPAIGN SCRIPTS, and used
+real-numpy-under-an-alias, which cannot detect host/device type mixing at
+all (see below).
+
+### Five real bugs found and fixed, all the same root cause
+Plain host NumPy arrays were built with the global `np` and then mixed
+into arithmetic with device-resident (CuPy) arrays.  CuPy deliberately
+refuses this rather than silently doing something slow or wrong -- exactly
+the same "loud failure over silent wrongness" principle this project has
+applied everywhere else (Drive persistence, backend selection).
+- [x] `lattice_seed()`: built `dens` as host `np.zeros`, accumulated
+      Gaussian bumps computed from `grid.X` (device on gpu).  FIXED: build
+      entirely on host via `grid.to_host(grid.X)`, tag once via
+      `grid.asarray()` at the end -- a ONE-TIME cost per run, matching the
+      pattern already proven correct in `kernels.py`'s kernel construction.
+- [x] `make_stirrers()`'s `V_stir(t)` closure: same pattern, but this
+      function is called EVERY TIMESTEP (the actual hot path GPU is meant
+      to accelerate).  Fixed differently: stays entirely on `grid.xp`
+      throughout, with NO host round trip per call, to avoid silently
+      erasing the GPU speedup for exactly the part of the run GPU helps
+      most. Building it like `lattice_seed` would have been correct but slow.
+- [x] Ground-state phase noise: `rng.standard_normal()` always returns a
+      host array (there is no device RNG used here); the old code
+      multiplied `solver.psi` (device on gpu) by it directly. Fixed by
+      building the noise on host, then `grid.asarray()` once before the
+      multiply.
+- [x] `solver.V = np.zeros(grid.shape)` at the stirring-to-decay
+      transition: same fix, `grid.xp.zeros(...)`.
+- [x] `Run.save_checkpoint` (`qtsim/drive_io.py`) passed `psi` directly to
+      `np.savez_compressed`, which requires a literal host array. Fixed by
+      converting via `asnumpy(psi)` explicitly regardless of backend.
+- [x] Preventive fix, not yet triggered by anything real: Cell 6's
+      plotting lines called `np.abs(s.psi)`/`np.angle(s.psi)` directly,
+      which would hit the same class of error if `backend="gpu"` were ever
+      wired into the demo cells (currently it is not; only Cell 7 and the
+      campaign scripts expose it). Fixed to route through `grid.to_host()`.
+
+### Verification, and its honest limits
+Two complementary checks, neither alone sufficient, together reasonably
+strong:
+1. **Structural**: every fix follows the identical "build on host once,
+   tag via `grid.asarray()`" pattern already used and verified correct in
+   `kernels.py`'s `bare_dipolar_symbol`/`quasi2d_dipolar_symbol`, or (for
+   the genuine hot path) stays on `grid.xp` throughout with no host
+   round-trip, matching `solver.py`'s own step functions.
+2. **Simple-fake full run**: `run_point()` executed end-to-end under both
+   `backend="cpu"` and a v2.4-style fake `cupy` (literally NumPy under an
+   alias) and produced BIT-FOR-BIT identical contrast, mu, residual, R,
+   vortex count, energy drift, and norm drift.  This confirms the patches
+   introduce no unrelated logic error and reduce correctly when the
+   backend is "numpy in disguise".
+3. **What this does NOT confirm**: a stricter adversarial test using a
+   genuinely distinct fake array TYPE (built as an `np.ndarray` subclass
+   to make host/device mixing raise exactly as real CuPy does) hit ITS OWN
+   test-double fidelity limit: `qtsim.backend.asnumpy()` checks
+   `isinstance(arr, np.ndarray)` first, which is correct for REAL CuPy
+   (whose arrays never subclass `np.ndarray` at all -- a completely
+   separate class hierarchy) but incorrectly short-circuits for a
+   subclass-based fake, silently leaving the "device" tag in place through
+   `to_host()` calls.  Building a fully faithful non-subclassing wrapper
+   type to close this gap was not completed here.  **This means the fixes
+   are well-argued and pattern-matched but not proven against a test that
+   can catch every possible host/device mixing bug without real hardware.**
+- [ ] **The only fully trustworthy confirmation is re-running
+      `track_a_scan.py --backend gpu` on real Colab GPU hardware.** This
+      is fast and cheap for the user to do right now and is the
+      recommended next step over further investment in test-double fidelity.

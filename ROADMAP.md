@@ -11,6 +11,12 @@ parameter.  PHASE4_REVISED.md rebuilds the design.  Remaining:
 - [ ] Obtain a measured droplet spacing to close V4
 - [ ] Implement Track B trapped few-droplet geometry
 
+## Step 1.95 — track_a_scan.py GPU port (v2.5, fixed on a real crash)
+- [x] Five host/device mixing bugs found and fixed in the campaign script
+      itself (v2.4 only ported the qtsim package, not the scripts)
+- [ ] **Re-run `--backend gpu` on real Colab hardware to confirm** -- the
+      strongest available verification without real GPU access here
+
 ## Step 1.9 — GPU backend (v2.4, done except real-hardware check)
 - [x] CuPy backend implemented, explicit opt-in, verified against a fake
       GPU module to prove the abstraction has no gaps
