@@ -85,7 +85,7 @@ qt/
 ```bash
 git clone https://github.com/vk001king/qt.git
 cd qt
-pip install numpy scipy matplotlib
+pip install -r requirements.txt         # numpy, scipy, matplotlib
 python tests/run_validation.py          # expect: 45/45 checks passed
 python test_notebook_cells.py           # expect: 6 passed, 1 skipped (GPU)
 ```
