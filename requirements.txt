@@ -1,0 +1,9 @@
+# QT - runtime dependencies
+#
+# scipy is required, not optional: qtsim/minimize.py (L-BFGS-B energy
+# minimisation, the v1.6 feature) and validation checks T8a/T10/T12d
+# import it.  kernels.py uses scipy.special.erfcx when present but has a
+# numpy fallback, so scipy is only soft there.
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7

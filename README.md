@@ -4,7 +4,7 @@
 
 A validated pseudo-spectral solver for the **extended Gross–Pitaevskii equation** (eGPE) with dipolar interactions and Lee–Huang–Yang corrections, built to study vortex-tangle quantum turbulence in dipolar supersolids.
 
-**Status:** 41/41 validation checks passing. All 6 notebook cells verified by execution at **full length** (no shortened loops).
+**Status:** 45/45 validation checks passing. All 6 notebook cells verified by execution at **full length** (no shortened loops).
 
 **v1.1** fixes a temporal-aliasing blow-up in v1.0. See *Bug history* below.
 
@@ -58,7 +58,7 @@ qt/
 │   ├── diagnostics.py        vortex detection, circulation, Helmholtz split
 │   └── drive_io.py           Archive: structured timestamped output
 ├── tests/
-│   └── run_validation.py     18-check validation suite
+│   └── run_validation.py     45-check validation suite
 ├── notebooks/
 │   └── qt_colab.ipynb        Colab notebook (all cells execution-tested)
 ├── campaign/
@@ -77,8 +77,8 @@ qt/
 ```bash
 git clone https://github.com/vk001king/qt.git
 cd qt
-pip install numpy matplotlib
-python tests/run_validation.py          # expect: 41/41 checks passed
+pip install -r requirements.txt         # numpy, scipy, matplotlib
+python tests/run_validation.py          # expect: 45/45 checks passed
 python test_notebook_cells.py           # expect: 6/6 cells executed
 ```
 
@@ -144,7 +144,7 @@ with `D` the dipolar convolution (Fourier symbol `3cos²θ_k − 1`), `ε_dd = a
 
 ## Validation
 
-Run `python tests/run_validation.py`. Forty-one checks, all passing:
+Run `python tests/run_validation.py`. Forty-five checks, all passing:
 
 | Check | Measured | Criterion |
 |---|---|---|
@@ -171,6 +171,28 @@ Run `python tests/run_validation.py`. Forty-one checks, all passing:
 | T7c energy drift to t=60 | 1.26e-08 | < 1e-5 |
 | T7d norm drift to t=60 | 5.8e-13 | < 1e-10 |
 | T7e vortex count to t=60 | 2 | exactly 2 |
+| T8a quasi-2D kernel vs quadrature | 5.0e-15 | < 1e-10 |
+| T8b kernel limits D(0), D(∞) | 2.828 / −1.414 | exact |
+| T8c overflow-safe at k=1e6 | −1.414214 | finite ≈ −√2 |
+| T8d kernel changes sign | max 2.828, min −1.414 | +ve small k, −ve large k |
+| T8e roton instability (ε_dd=1.8, l_z=6) | min −0.603, a 7.14 ξ | min_inside < 0 |
+| T8f grid symbol consistent, 3D rejected | maxdiff 0.0 | match and 3D rejected |
+| T9a charge neutrality under stirring | net 0, peak 52 | net == 0 with vortices |
+| T9b drive removal = ∫V·n | 6.5e-16 | < 1e-10 |
+| T9c free-decay energy conservation | 1.28e-06 | < 1e-5 |
+| T9d free-decay norm conservation | 1.0e-12 | < 1e-10 |
+| T9e charge neutrality after decay | net 0 | net == 0 |
+| T10a L-BFGS lowers the energy | 1127.07 → 1125.44 | energy decreases |
+| T10b L-BFGS improves the residual | 5.4e-02 → 1.1e-06 | improves > 10× |
+| T10c norm preserved by minimiser | 0.0 | < 1e-10 |
+| T10d minimiser reports convergence | nit 94, success | success True |
+| T11a rejects void false positives | 2520 → 65 (97.4%) | > 95% rejected |
+| T11b keeps the real vortex | 1 | == 1 |
+| T11c no-op on a clean pair | raw 2, masked 2 | both == 2 |
+| T12a default backend is cpu | 'cpu' | 'cpu' |
+| T12b invalid backend rejected | raised | ValueError raised |
+| T12c GPU-unavailable request raises | raised | RuntimeError (never silent) |
+| T12d full pipeline on backend='cpu' | μ 5.27, res 1.9e-04 | finite, diagnostics run |
 
 ## Bug history
 
@@ -218,32 +240,6 @@ projected kernel gives a physical modulation wavelength (rung V4).
 Higher validation rungs (comparison against published ¹⁶⁴Dy results, glitch dynamics, turbulence regression) are listed in `ROADMAP.md` as the next work item.
 
 ---
-
-## v1.8: real experimental parameters, and H1 inverted
-
-Casotti et al., *Nature* **635**, 327 (2024) was read in full including
-Methods. Three corrections followed; see `EXPERIMENTAL_PARAMETERS.md`.
-
-**H1 was backwards.** We hypothesised that interstitial pinning *raises*
-the vortex nucleation threshold in a supersolid. The paper reports the
-opposite in both experiment and its own eGPE: the supersolid nucleates at
-`Omega ~ 0.25-0.45 omega_perp` against `~0.6` for the BEC, because a 2D
-supersolid's near-degenerate **crystal** quadrupole mode opens an extra
-angular-momentum channel. Pinning governs vortex motion and decay, not the
-threshold. H1 must be inverted before any campaign tests it.
-
-**eps_dd = 1.8 was outside the supersolid phase.** Real window is
-`a_s = 90-95 a0` with `a_dd = 130.8 a0`, i.e. `eps_dd = 1.377-1.453`. Our
-1.8 means `a_s = 72.7 a0` -- isolated droplets. At real parameters the roton
-survives but `min(inside)` is only `-0.03` to `-0.19` versus `-0.60` at 1.8,
-and vanishes at higher density: crystal existence is density-sensitive, which
-the wrong value hid entirely. Defaults are now `eps_dd = 1.414`, `l_z/xi = 8.6`.
-
-**Confirmed:** our `Q5` and LHY prefactor are algebraically identical to
-theirs, and the `Re{}` convention for `eps_dd > 1` is now sourced -- that
-flag is closed. Our v1.7 vortex-count systematic is independently
-corroborated: they mask to a 6 um circle and state that varying their
-detection threshold changes absolute counts but not qualitative results.
 
 ## v1.8: real experimental parameters, and H1 inverted
 

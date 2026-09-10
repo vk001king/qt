@@ -102,7 +102,14 @@ def minimize_energy(solver: EGPESolver, N_target: float | None = None,
     `N_target`.  Returns a dict with the final energy, chemical potential,
     stationarity residual, iteration count and scipy's message.
     """
-    from scipy.optimize import minimize as _sp_min
+    try:
+        from scipy.optimize import minimize as _sp_min
+    except ImportError as exc:  # pragma: no cover - environment guard
+        raise ImportError(
+            "minimize_energy requires scipy. Install the project "
+            "dependencies with `pip install -r requirements.txt` "
+            "(or `pip install scipy`)."
+        ) from exc
 
     g = solver.g
     xp = g.xp
