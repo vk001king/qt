@@ -1,0 +1,11 @@
+# Runtime dependencies for the qtsim solver package.
+# On Google Colab these are pre-installed; listed here so a bare Python
+# environment or CI runner reproduces the validated stack.
+numpy>=1.21
+scipy>=1.7          # required: qtsim.minimize (L-BFGS-B), kernels erfcx
+matplotlib>=3.4     # figures in the notebook and campaign runners
+
+# Optional GPU backend (Cell 7 / --backend gpu). Install the wheel that
+# matches your CUDA toolkit, e.g.:
+#   pip install cupy-cuda12x
+# cupy

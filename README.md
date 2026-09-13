@@ -4,9 +4,12 @@
 
 A validated pseudo-spectral solver for the **extended Gross–Pitaevskii equation** (eGPE) with dipolar interactions and Lee–Huang–Yang corrections, built to study vortex-tangle quantum turbulence in dipolar supersolids.
 
-**Status:** 41/41 validation checks passing. All 6 notebook cells verified by execution at **full length** (no shortened loops).
+**Status:** v2.5. 45/45 validation checks passing. All 6 core notebook cells
+verified by execution at **full length** (no shortened loops); a 7th, optional
+cell verifies the GPU backend and is skipped automatically when no GPU is present.
 
-**v1.1** fixes a temporal-aliasing blow-up in v1.0. See *Bug history* below.
+Version history is summarised below, newest first; the *Bug history* section
+records the v1.0 → v1.1 temporal-aliasing fix in full.
 
 ---
 
@@ -52,21 +55,26 @@ Folders are checked before creation, never overwritten. Each run is stamped with
 qt/
 ├── qtsim/                    the solver package
 │   ├── __init__.py           public API + selfcheck()
-│   ├── kernels.py            Grid; bare and Ronen-truncated dipolar symbols
+│   ├── backend.py            CPU/GPU (CuPy) array backend, explicit opt-in
+│   ├── kernels.py            Grid; bare and quasi-2D projected dipolar symbols
 │   ├── lhy.py                Lee–Huang–Yang Q5 integral, gamma_tilde
 │   ├── solver.py             EGPESolver: split-step real/imaginary time
+│   ├── minimize.py           L-BFGS-B energy minimiser, multi-start ensemble
 │   ├── diagnostics.py        vortex detection, circulation, Helmholtz split
 │   └── drive_io.py           Archive: structured timestamped output
 ├── tests/
-│   └── run_validation.py     18-check validation suite
+│   └── run_validation.py     45-check validation suite
 ├── notebooks/
 │   └── qt_colab.ipynb        Colab notebook (all cells execution-tested)
 ├── campaign/
-│   └── template_scan.py      parameter-scan runner with checkpointing
+│   ├── template_scan.py      parameter-scan runner with checkpointing
+│   └── track_a_scan.py       Track A H4′ frustration-crossover scan
 ├── test_notebook_cells.py    harness that executes every notebook cell
 ├── VALIDATION_RESULTS.json   machine-readable validation record
 ├── ROADMAP.md                remaining steps to publication
 ├── FLAGS.md                  open reference and code items
+├── PHASE4_REVISED.md         redesigned Phase 4 experiment (C8 crossover)
+├── EXPERIMENTAL_PARAMETERS.md real ¹⁶⁴Dy parameters (Casotti et al. 2024)
 └── LICENSE                   MIT
 ```
 
@@ -77,9 +85,9 @@ qt/
 ```bash
 git clone https://github.com/vk001king/qt.git
 cd qt
-pip install numpy matplotlib
-python tests/run_validation.py          # expect: 41/41 checks passed
-python test_notebook_cells.py           # expect: 6/6 cells executed
+pip install -r requirements.txt         # numpy, scipy, matplotlib
+python tests/run_validation.py          # expect: 45/45 checks passed
+python test_notebook_cells.py           # expect: 6 passed, 1 skipped (GPU)
 ```
 
 A campaign run:
@@ -144,7 +152,8 @@ with `D` the dipolar convolution (Fourier symbol `3cos²θ_k − 1`), `ε_dd = a
 
 ## Validation
 
-Run `python tests/run_validation.py`. Forty-one checks, all passing:
+Run `python tests/run_validation.py`. Forty-five checks, all passing (the
+machine-readable record is in `VALIDATION_RESULTS.json`):
 
 | Check | Measured | Criterion |
 |---|---|---|
@@ -171,6 +180,28 @@ Run `python tests/run_validation.py`. Forty-one checks, all passing:
 | T7c energy drift to t=60 | 1.26e-08 | < 1e-5 |
 | T7d norm drift to t=60 | 5.8e-13 | < 1e-10 |
 | T7e vortex count to t=60 | 2 | exactly 2 |
+| T8a quasi-2D kernel vs quadrature | 4.99e-15 | < 1e-10 |
+| T8b kernel limits D(0), D(∞) | 2.828 / −1.414 | 2√2 / −√2 |
+| T8c overflow-safe at k=1e6 | −1.414214 | finite, ≈ −√2 |
+| T8d kernel changes sign (roton) | max 2.828, min −1.414 | + small k, − large k |
+| T8e roton instability eps_dd=1.8 | min_inside −0.6026 | < 0 (unstable) |
+| T8f grid symbol, 3D rejected | maxdiff 0, rejected | match and 3D rejected |
+| T9a charge neutrality (stirred) | worst \|net\|=0, peak 52 | net == 0 with vortices |
+| T9b drive removes exactly ∫Vn | 6.50e-16 | < 1e-10 |
+| T9c free-decay energy | 1.28e-06 | < 1e-5 |
+| T9d free-decay norm | 1.03e-12 | < 1e-10 |
+| T9e charge neutrality after decay | net 0 | net == 0 |
+| T10a L-BFGS lowers energy | 1127.07 → 1125.44 | energy decreases |
+| T10b L-BFGS improves residual | 5.41e-02 → 7.54e-07 | > 10× improvement |
+| T10c minimiser preserves norm | 1.89e-16 | < 1e-10 |
+| T10d minimiser converges | nit 93, success | success True |
+| T11a rejects void false positives | 2520 → 65 (97.4%) | > 95% rejected |
+| T11b keeps the real vortex | 1 | == 1 |
+| T11c no-op on clean pair | raw 2, masked 2 | both == 2 |
+| T12a default backend is cpu | 'cpu' | 'cpu' |
+| T12b invalid backend rejected | raised | ValueError |
+| T12c GPU-unavailable raises | raised (RuntimeError) | never silent fallback |
+| T12d full pipeline on cpu | mu 5.27, resid 1.9e-04 | finite, diagnostics run |
 
 ## Bug history
 
@@ -219,31 +250,37 @@ Higher validation rungs (comparison against published ¹⁶⁴Dy results, glitch
 
 ---
 
-## v1.8: real experimental parameters, and H1 inverted
+## v2.0 – v2.5: redesigned experiment, Track A scan, GPU backend
 
-Casotti et al., *Nature* **635**, 327 (2024) was read in full including
-Methods. Three corrections followed; see `EXPERIMENTAL_PARAMETERS.md`.
+**v2.0 — Phase 4 redesigned; C8 identified.** With H1 inverted (v1.8), the
+original pinning-threshold question no longer held. A second source read
+(v1.9) contradicted the pinning picture further. Phase 4 was rebuilt around
+contradiction **C8** — a frustration crossover — with the **H4′** hypothesis
+as the flagship experiment. See `PHASE4_REVISED.md`.
 
-**H1 was backwards.** We hypothesised that interstitial pinning *raises*
-the vortex nucleation threshold in a supersolid. The paper reports the
-opposite in both experiment and its own eGPE: the supersolid nucleates at
-`Omega ~ 0.25-0.45 omega_perp` against `~0.6` for the BEC, because a 2D
-supersolid's near-degenerate **crystal** quadrupole mode opens an extra
-angular-momentum channel. Pinning governs vortex motion and decay, not the
-threshold. H1 must be inverted before any campaign tests it.
+**v2.1 — real-parameter metastability.** Running at the corrected
+`eps_dd = 1.414` exposed a metastability that the old `1.8` had masked, plus
+box-scaling and verdict-logic bugs in the campaign harness; all fixed.
 
-**eps_dd = 1.8 was outside the supersolid phase.** Real window is
-`a_s = 90-95 a0` with `a_dd = 130.8 a0`, i.e. `eps_dd = 1.377-1.453`. Our
-1.8 means `a_s = 72.7 a0` -- isolated droplets. At real parameters the roton
-survives but `min(inside)` is only `-0.03` to `-0.19` versus `-0.60` at 1.8,
-and vanishes at higher density: crystal existence is density-sensitive, which
-the wrong value hid entirely. Defaults are now `eps_dd = 1.414`, `l_z/xi = 8.6`.
+**v2.2 – v2.3 — Track A H4′ scan.** `campaign/track_a_scan.py` implements the
+frustration-crossover experiment. It is verified to bracket the crossover
+`R = 1` and recalibrated (v2.3) for reliable measurement on the low-vortex
+`R > 1` side, where the masked **net charge is now returned as a quality
+gate** (true circulation is zero, so residual imbalance measures
+mis-clipping). The default detection box is 12 cells; see the v1.7 note below.
 
-**Confirmed:** our `Q5` and LHY prefactor are algebraically identical to
-theirs, and the `Re{}` convention for `eps_dd > 1` is now sourced -- that
-flag is closed. Our v1.7 vortex-count systematic is independently
-corroborated: they mask to a 6 um circle and state that varying their
-detection threshold changes absolute counts but not qualitative results.
+**v2.4 — GPU backend.** `qtsim/backend.py` adds an explicit opt-in CuPy
+backend (`backend='gpu'`), verified against a fake GPU module to prove the
+abstraction has no silent gaps — a GPU request never falls back to CPU, it
+raises (T12). This release also fixed a real regression: the sequential
+notebook test harness had been silently broken outside Colab since v1.4.
+
+**v2.5 — campaign GPU port.** v2.4 ported only the `qtsim` package, not the
+campaign scripts; five host/device mixing bugs in `track_a_scan.py` were
+found and fixed. The remaining open item is a real-hardware GPU run to
+confirm the port and record an actual speedup — see `ROADMAP.md`.
+
+---
 
 ## v1.8: real experimental parameters, and H1 inverted
 

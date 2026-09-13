@@ -1,6 +1,6 @@
 # Roadmap to publication
 
-Current position: **Step 1 complete** — solver built, 38/38 validation checks
+Current position: **Step 1 complete** — solver built, 45/45 validation checks
 passing, all notebook cells execution-tested.
 
 ## Step 1.5 — DESIGN REPAIR (new, blocking)   ~1-2 weeks
