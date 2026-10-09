@@ -1,8 +1,9 @@
 # Roadmap to publication
 
-Current position (v2.6): **Track A 12-cell scan done; crossover gap and
-null test being filled.**  Earlier: **Step 1 complete** — solver built, 45/45 validation checks
-passing, all notebook cells execution-tested.
+Current position (v2.6): **Track A 12-cell scan complete (24/24 clean
+points) with the surrogate null test; crossover gap (R 0.8-1.3) and long
+decay still to run.**  Earlier: **Step 1 complete** — solver built, now
+50/50 validation checks passing on CPU and on a real Colab T4.
 
 ## Step 1.5 — DESIGN REPAIR (new, blocking)   ~1-2 weeks
 The literature reading invalidated two hypotheses and the pinning control
@@ -18,24 +19,29 @@ parameter.  PHASE4_REVISED.md rebuilds the design.  Remaining:
 - [x] `--report`: filter on stored params, box check, CSV
 - [x] Formal null test: phase-randomised + IAAFT surrogates, p per run
 - [x] MAD == 0 guard in `detect_avalanches` (finding F3)
-- [ ] Colab: re-run the full 12-cell scan command once -- only the two
-      missing points (Ma 0.6 / 2.4, seed 0) will run; then Cell 7
+- [x] Colab T4: the two missing 12-cell points (Ma 0.6 / 2.4, seed 0)
+      re-run (2026-10-09, 3.9 min, not skipped by the new key); 24-row
+      table rebuilt: 0 of 24 runs with p_phase(theta=3) < 0.05
 - [ ] Colab Cell 8: gap-fill drives 0.65-0.80 x 3 seeds (R 0.8-1.3)
 - [ ] Colab Cell 8: T_decay = 600 for Ma 0.6, 0.9, 1.3 + gap drives
 
 ## Step 1.95 — track_a_scan.py GPU port (v2.5, fixed on a real crash)
 - [x] Five host/device mixing bugs found and fixed in the campaign script
       itself (v2.4 only ported the qtsim package, not the scripts)
-- [ ] **Re-run `--backend gpu` on real Colab hardware to confirm** -- the
-      strongest available verification without real GPU access here
+- [x] Confirmed on a real Colab T4 (2026-10-09): `--quick --backend gpu`
+      and two production 12-cell points ran clean (dE/E <= 1e-7)
 
 ## Step 1.9 — GPU backend (v2.4, done except real-hardware check)
 - [x] CuPy backend implemented, explicit opt-in, verified against a fake
       GPU module to prove the abstraction has no gaps
 - [x] Fixed a real regression: the sequential notebook test harness had
       been silently broken since v1.4 outside Colab
-- [ ] Run Cell 9 (was Cell 7 before v2.6) on real Colab GPU hardware; record actual speedup
-- [ ] Re-run Track A at `--backend gpu` once confirmed working
+- [ ] Run Cell 9 (was Cell 7 before v2.6) on real Colab GPU hardware;
+      record a controlled CPU-vs-GPU speedup.  Indirect evidence only so
+      far: stored Track A wall times are ~1280 s (4 runs) versus ~120 s
+      (18 runs) per 12-cell point, i.e. ~10.7x, but v2.5 runs did not
+      record their backend, so the split is inferred from timing
+- [x] Track A run at `--backend gpu` on a T4 (~2 min per 12-cell point)
 
 ## Step 1.75 — TRACK A: the H4' scan (READY TO RUN)   ~2-4 weeks
 `campaign/track_a_scan.py` implements the frustration-crossover experiment

@@ -551,9 +551,28 @@ Found while reading the completed 24-point Track A table (2026-10-09).
 - [x] Notebook: new Cell 7 (results + null test, read-only) and Cell 8
       (gap-fill drives 0.65-0.80 and T_decay = 600 long decay, both off by
       default).  GPU cell is now Cell 9.  The validation suite is 50 checks.
-- [ ] **Run on Colab:** Cell 7 on the existing data (confirms F1 from the
-      stored params on Drive), then Cell 8.  The two missing 12-cell points
-      (Ma 0.6 and 2.4, seed 0) will be run by any full-scan invocation.
+- [x] **Run on Colab (T4, 2026-10-09).**  Stored params on Drive confirm
+      F1: exactly two finished runs have cells=8, T_stir=15, T_decay=40 --
+      `2026-08-12_1018_tracka-ma0.60-seed0-eps1.414` and
+      `2026-08-12_1020_tracka-ma2.40-seed0-eps1.414`, started 2 min apart,
+      just before the 12-cell scan.  `--quick --backend gpu` reproduces
+      both rows exactly (nv 15 / R 1.922 and nv 122 / R 0.674).  The two
+      missing 12-cell points were then run (not skipped by the new key):
+        Ma 0.60 seed 0: nv 40,   R 1.766, events 8/0/0, conservative
+        Ma 2.40 seed 0: nv 2982, R 0.204, events 12/2/0, conservative
+      The "2.40 outlier" (nv 122) is gone: siblings give nv 3003-3006.
+      24-row 12-cell table: 0 of 24 runs with p_phase(theta=3) < 0.05
+      (~1.2 expected by chance); no run yet in R 0.8-1.3.
+- [x] **T12c failed on real GPU hardware (test bug, not a code bug).**  It
+      asserted that `get_backend("gpu")` raises, which is only true when no
+      GPU exists; on a T4 the call correctly returns CuPy, so the suite
+      reported 49/50.  T12c now detects a GPU independently: without one
+      it still requires a RuntimeError; with one it requires CuPy (never
+      NumPy) back.  50/50 on CPU and on the T4.  First time T12 ran on a
+      GPU.
+- [ ] Cell 8 on the T4: gap-fill (12 points, est. ~25 min) and
+      T_decay = 600 (21 points, est. ~2.5-3 h), both scaled from the
+      measured ~2 min per 12-cell point.
 - [ ] Known limitation: with nv < ~20 the masked count flickers by +-1,
       so L(t) is strongly quantised; the IAAFT p-value is the one to quote
       there, and those rows stay below the trust floor regardless.
