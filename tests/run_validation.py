@@ -570,19 +570,43 @@ def t12_backend_selection():
     record("T12b invalid backend name rejected", f"raised={invalid_raised}",
            "ValueError raised", invalid_raised)
 
-    # The critical safety property: gpu request with no CuPy/GPU present
-    # must RAISE, never silently continue on CPU.
-    gpu_raised, gpu_is_runtime_error = False, False
+    # The critical safety property: a gpu request must never silently
+    # continue on CPU.  Which half of that can be tested depends on the
+    # host, so the GPU is detected INDEPENDENTLY of get_backend():
+    #   no CuPy/GPU -> get_backend('gpu') must RAISE RuntimeError
+    #   CuPy + GPU  -> get_backend('gpu') must return CuPy, not NumPy
+    # BUG FIX (v2.6.1): T12c only had the first branch, so it FAILED on a
+    # real Colab T4 (raised=False) -- correct behaviour reported as a
+    # failure.  It had never been run on GPU hardware before.
+    gpu_present = False
     try:
-        get_backend("gpu")
-    except RuntimeError:
-        gpu_raised = True
-        gpu_is_runtime_error = True
+        import cupy as _cp
+        gpu_present = _cp.cuda.runtime.getDeviceCount() > 0
     except Exception:
-        gpu_raised = True
-    record("T12c GPU-unavailable request raises (never silent fallback)",
-           f"raised={gpu_raised}, RuntimeError={gpu_is_runtime_error}",
-           "raises RuntimeError", gpu_raised and gpu_is_runtime_error)
+        gpu_present = False
+
+    if gpu_present:
+        try:
+            xp, fft_mod, name = get_backend("gpu")
+            ok = (xp.__name__ == "cupy" and name == "gpu"
+                  and fft_mod.__name__.startswith("cupy"))
+            val = f"GPU present: returned xp={xp.__name__}, name={name!r}"
+        except Exception as exc:
+            ok, val = False, f"GPU present but raised {type(exc).__name__}"
+        record("T12c GPU request on a GPU host returns CuPy (no silent CPU)",
+               val, "xp is cupy, name 'gpu'", ok)
+    else:
+        gpu_raised, gpu_is_runtime_error = False, False
+        try:
+            get_backend("gpu")
+        except RuntimeError:
+            gpu_raised = True
+            gpu_is_runtime_error = True
+        except Exception:
+            gpu_raised = True
+        record("T12c GPU-unavailable request raises (never silent fallback)",
+               f"raised={gpu_raised}, RuntimeError={gpu_is_runtime_error}",
+               "raises RuntimeError", gpu_raised and gpu_is_runtime_error)
 
     # Full pipeline on the explicit backend path: kernel + solver +
     # minimiser + masked diagnostics together, matching how a real run
