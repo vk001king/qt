@@ -51,6 +51,8 @@ USAGE
 from __future__ import annotations
 
 import argparse
+import glob
+import hashlib
 import json
 import os
 import sys
@@ -111,6 +113,14 @@ def parse_args():
                    help="tiny smoke test: 2 drives, 1 seed, short times")
     p.add_argument("--outdir", type=str, default=None,
                    help="local output dir instead of Google Drive")
+    p.add_argument("--report", action="store_true",
+                   help="do NOT simulate: read every finished Track A run in "
+                        "the archive, keep only those whose STORED params "
+                        "match the current --cells/--T_decay/... settings, "
+                        "print the table and write trackA_results.csv")
+    p.add_argument("--surrogates", type=int, default=0,
+                   help="with --report: number of surrogates per run for the "
+                        "formal null test (0 = skip; 199 recommended)")
     p.add_argument("--backend", type=str, default="cpu", choices=("cpu", "gpu"),
                    help="'cpu' (NumPy, default) or 'gpu' (CuPy).  GPU must be "
                         "requested explicitly; a request with no CuPy/GPU "
@@ -235,20 +245,40 @@ def sample(solver, grid, t, d, area):
                 n_max=float(n.max()), n_min=float(n.min()))
 
 
-def detect_avalanches(recs, theta=3.0):
-    """Events in -dL/dt exceeding theta local standard deviations.
+# np.trapezoid exists only in NumPy >= 2.0; np.trapz was removed in 2.x.
+# requirements.txt allows numpy>=1.21, so support both.
+_trapz = getattr(np, "trapezoid", None) or getattr(np, "trapz")
 
-    Returns (events, stats).  Sensitivity to theta is reported rather than
-    hidden: the caller sweeps theta and stores all of them.
+
+def _events_from_series(t, L, theta):
+    """Core event detector on arrays.  See detect_avalanches for the rules.
+
+    Robust scale: sigma = 1.4826 * MAD of -dL/dt.
+
+    BUG FIX (v2.6, finding F3): the old code used MAD + 1e-30.  When most
+    -dL/dt samples are identical (small, nearly constant vortex number --
+    exactly the R > 1 side) MAD is 0, sigma collapses to ~1e-30, and EVERY
+    nonzero drop counted as an event.  Now:
+      MAD > 0           -> sigma = 1.4826 MAD          (sigma_method 'mad')
+      MAD == 0, std > 0 -> sigma = std(-dL/dt)         ('std_fallback')
+      std == 0          -> no events, flat signal      ('flat')
+    The method used is returned so the fallback is never silent.
+    Cost: O(n log n) for the medians, n = number of samples.
     """
-    t = np.array([r["t"] for r in recs])
-    L = np.array([r["L"] for r in recs])
-    if len(t) < 8:
-        return [], dict(n_events=0, note="too few samples")
     drop = -np.gradient(L, t)                # positive when L decreases
-    med = np.median(drop)
-    mad = np.median(np.abs(drop - med)) + 1e-30
-    sigma = 1.4826 * mad                     # robust sigma
+    med = float(np.median(drop))
+    mad = float(np.median(np.abs(drop - med)))
+    scale = max(float(np.max(np.abs(drop))), 1e-300)
+    if mad > 1e-12 * scale:
+        sigma, method = 1.4826 * mad, "mad"
+    else:
+        sd = float(np.std(drop))
+        if sd > 1e-12 * scale and np.any(drop != 0):
+            sigma, method = sd, "std_fallback"
+        else:
+            return [], dict(n_events=0, threshold=float("inf"),
+                            robust_sigma=0.0, sigma_method="flat",
+                            mean_size=0.0, mean_wait=0.0)
     thr = med + theta * sigma
     events, i = [], 0
     while i < len(drop):
@@ -256,7 +286,7 @@ def detect_avalanches(recs, theta=3.0):
             j = i
             while j + 1 < len(drop) and drop[j + 1] > thr:
                 j += 1
-            size = float(np.trapezoid(drop[i:j + 1], t[i:j + 1])) \
+            size = float(_trapz(drop[i:j + 1], t[i:j + 1])) \
                 if j > i else float(drop[i] * (t[1] - t[0]))
             events.append(dict(t_start=float(t[i]), t_end=float(t[j]),
                                size=abs(size), peak=float(drop[i:j + 1].max())))
@@ -266,16 +296,203 @@ def detect_avalanches(recs, theta=3.0):
     waits = [events[k + 1]["t_start"] - events[k]["t_end"]
              for k in range(len(events) - 1)]
     return events, dict(n_events=len(events), threshold=float(thr),
-                        robust_sigma=float(sigma),
+                        robust_sigma=float(sigma), sigma_method=method,
                         mean_size=float(np.mean([e["size"] for e in events]))
                         if events else 0.0,
                         mean_wait=float(np.mean(waits)) if waits else 0.0)
 
 
+def detect_avalanches(recs, theta=3.0):
+    """Events in -dL/dt exceeding median + theta robust standard deviations.
+
+    An event is a contiguous run of samples above threshold.  Returns
+    (events, stats).  Sensitivity to theta is reported rather than hidden:
+    the caller sweeps theta and stores all of them.
+    """
+    t = np.array([r["t"] for r in recs], dtype=float)
+    L = np.array([r["L"] for r in recs], dtype=float)
+    if len(t) < 8:
+        return [], dict(n_events=0, note="too few samples")
+    return _events_from_series(t, L, theta)
+
+
+# ------------------------------------------------------ formal null test
+def _detrend_endpoints(x):
+    """Remove the straight line joining the end points (Theiler et al.).
+
+    Fourier surrogates treat the series as periodic; a decaying L(t) has a
+    large end-to-start jump that would leak power into every frequency.
+    Returns (residual, trend) with x = residual + trend.
+    """
+    n = len(x)
+    trend = x[0] + (x[-1] - x[0]) * np.arange(n) / max(n - 1, 1)
+    return x - trend, trend
+
+
+def phase_randomised(x, rng):
+    """Fourier-transform surrogate: same power spectrum, random phases.
+
+    Null hypothesis: x is a stationary LINEAR GAUSSIAN process.  Heavy-
+    tailed bursts and nonlinear structure are destroyed, so an observed
+    event count far above the surrogates indicates bursts beyond what a
+    Gaussian process with the same correlations produces.  O(n log n).
+    """
+    n = len(x)
+    X = np.fft.rfft(x - x.mean())
+    ph = rng.uniform(0, 2 * np.pi, len(X))
+    ph[0] = 0.0
+    if n % 2 == 0:
+        ph[-1] = 0.0                          # Nyquist term must stay real
+    return np.fft.irfft(np.abs(X) * np.exp(1j * ph), n) + x.mean()
+
+
+def iaaft(x, rng, n_iter=200):
+    """Iterative amplitude-adjusted Fourier surrogate (Schreiber-Schmitz).
+
+    Keeps the exact value distribution of x and (approximately) its power
+    spectrum.  Null: a linear Gaussian process seen through a static
+    monotone transform.  Because it keeps the value distribution, it keeps
+    the integer quantisation of the vortex count, which the plain phase-
+    randomised surrogate does not.  O(n_iter * n log n).
+    """
+    amp = np.abs(np.fft.rfft(x))
+    sorted_x = np.sort(x)
+    y = rng.permutation(x)
+    for _ in range(n_iter):
+        Y = np.fft.rfft(y)
+        y = np.fft.irfft(amp * np.exp(1j * np.angle(Y)), len(x))
+        ranks = np.argsort(np.argsort(y))
+        y_new = sorted_x[ranks]
+        if np.array_equal(y_new, y):
+            break
+        y = y_new
+    return y
+
+
+def surrogate_test(recs, thetas=(2.0, 3.0, 4.0), n_surr=199, seed=0,
+                   methods=("phase", "iaaft")):
+    """Formal null test of the avalanche event count for ONE run.
+
+    For each surrogate of L(t) (end-point detrended, surrogate made from
+    the residual, trend added back) the SAME detector is applied.  One-
+    sided p-value with the +1 correction (Davison & Hinkley):
+
+        p = (1 + #{surrogates with n_events >= observed}) / (1 + n_surr)
+
+    so the smallest attainable p is 1/(n_surr+1) = 0.005 for 199.
+    A plain time-shuffle is NOT offered: it destroys autocorrelation and
+    therefore only tests temporal clustering, not heavy tails.
+
+    Returns {method: {theta_X: {observed, surr_mean, surr_std, p}}}.
+    Cost: n_surr * len(methods) detector calls on ~400 samples (seconds).
+    """
+    t = np.array([r["t"] for r in recs], dtype=float)
+    L = np.array([r["L"] for r in recs], dtype=float)
+    out = {}
+    if len(t) < 8:
+        return {"note": "too few samples"}
+    resid, trend = _detrend_endpoints(L)
+    obs = {th: _events_from_series(t, L, th)[1]["n_events"] for th in thetas}
+    for m in methods:
+        rng = np.random.default_rng(seed)
+        counts = {th: [] for th in thetas}
+        for _ in range(n_surr):
+            s = phase_randomised(resid, rng) if m == "phase" \
+                else iaaft(resid, rng)
+            Ls = s + trend
+            for th in thetas:
+                counts[th].append(_events_from_series(t, Ls, th)[1]["n_events"])
+        out[m] = {}
+        for th in thetas:
+            c = np.array(counts[th])
+            out[m]["theta_%.1f" % th] = dict(
+                observed=int(obs[th]), surr_mean=float(c.mean()),
+                surr_std=float(c.std()),
+                p=float((1 + np.sum(c >= obs[th])) / (1 + n_surr)))
+    out["n_surr"] = int(n_surr)
+    return out
+
+
+# ------------------------------------------------- resume key (fix F2)
+# Every input that changes the PHYSICS or the MEASUREMENT of a point.
+# BUG FIX (v2.6, finding F2): completed points used to be matched by the
+# title "trackA Ma%.2f seed%d eps%.3f" alone, which ignores cells, T_stir,
+# T_decay, dx, l_z, n0_as3, V0_factor and n_stir.  An 8-cell run therefore
+# counted as "done" for the 12-cell scan (two rows of the 24-point table
+# came from an 8-cell box), and a --T_decay 600 re-run would have skipped
+# every point.  Points are now matched on all of these.
+KEY_FIELDS = ("eps_dd", "l_z", "n0_as3", "Ma", "seed", "cells", "dx",
+              "T_stir", "T_decay", "sample_every", "n_stir", "V0_factor")
+
+
+def resolved_n_stir(args):
+    return args.n_stir if args.n_stir > 0 else max(1, args.cells // 3)
+
+
+def point_params(args, Ma, seed):
+    """The physical-parameter set that identifies one scan point."""
+    return dict(eps_dd=float(args.eps_dd), l_z=float(args.l_z),
+                n0_as3=float(args.n0_as3), Ma=float(Ma), seed=int(seed),
+                cells=int(args.cells), dx=float(args.dx),
+                T_stir=float(args.T_stir), T_decay=float(args.T_decay),
+                sample_every=float(args.sample_every),
+                n_stir=int(resolved_n_stir(args)),
+                V0_factor=float(args.V0_factor))
+
+
+def param_key(pp):
+    """Stable 10-hex-digit hash of a point_params dict (floats rounded)."""
+    norm = {k: (round(float(pp[k]), 9) if isinstance(pp[k], float)
+                else pp[k]) for k in KEY_FIELDS}
+    blob = json.dumps(norm, sort_keys=True)
+    return hashlib.sha1(blob.encode()).hexdigest()[:10]
+
+
+def run_title(pp):
+    """Human-readable run title.  Includes the box and decay time so the
+    folder name alone no longer hides an 8-cell or long-decay run."""
+    return ("trackA Ma%.2f seed%d eps%.3f c%d Td%g k%s"
+            % (pp["Ma"], pp["seed"], pp["eps_dd"], pp["cells"],
+               pp["T_decay"], param_key(pp)))
+
+
+def stored_matches(stored, want, legacy_defaults=None):
+    """True if a run's STORED params equal the wanted point params.
+
+    Runs made before v2.6 did not store dx or sample_every.  dx is then
+    recovered from the stored box/grid (box/N, which differs from the
+    requested dx by rounding, so a 5 percent tolerance is used); a missing
+    sample_every is taken from `legacy_defaults` (the v2.5 default 0.5).
+    Any other missing field means "cannot verify" -> no match, so the point
+    is re-run rather than wrongly skipped.
+    """
+    legacy_defaults = legacy_defaults or {"sample_every": 0.5}
+    if not stored or stored.get("track") != "A":
+        return False
+    for k in KEY_FIELDS:
+        v = stored.get(k)
+        if v is None and k == "dx" and stored.get("box") and stored.get("grid"):
+            v = float(stored["box"][0]) / float(stored["grid"][0])
+            if abs(v - want["dx"]) > 0.05 * want["dx"]:
+                return False
+            continue
+        if v is None:
+            v = legacy_defaults.get(k)
+        if v is None:
+            return False
+        if isinstance(want[k], float):
+            if abs(float(v) - want[k]) > 1e-9 * max(1.0, abs(want[k])):
+                return False
+        elif int(v) != int(want[k]):
+            return False
+    return True
+
+
 # --------------------------------------------------------------------- run
 def run_point(archive, args, scales, Ma, seed):
     k_rot, lam, d, min_inside = scales
-    tag = "trackA Ma%.2f seed%d eps%.3f" % (Ma, seed, args.eps_dd)
+    pp = point_params(args, Ma, seed)
+    tag = run_title(pp)
 
     grid = build_grid(d, args.cells, args.dx, backend=args.backend)
     area = float(np.prod(grid.lengths))
@@ -285,14 +502,12 @@ def run_point(archive, args, scales, Ma, seed):
     solver = EGPESolver(grid, eps_dd=args.eps_dd, gamma=gamma, Dk=Dk)
     dt = min(0.005, solver.suggested_dt() * 0.6)
 
-    run = archive.new_run(tag, params=dict(
-        track="A", hypothesis="H4prime", eps_dd=args.eps_dd, l_z=args.l_z,
-        n0_as3=args.n0_as3, Ma=Ma, seed=seed, cells=args.cells,
-        grid=list(grid.shape), box=list(grid.lengths), dt=dt,
-        k_rot=k_rot, lambda_roton=lam, d_droplet=d, min_inside=min_inside,
-        T_stir=args.T_stir, T_decay=args.T_decay,
-        n_stir=(args.n_stir if args.n_stir > 0 else max(1, args.cells // 3)),
-        V0_factor=args.V0_factor))
+    params = dict(track="A", hypothesis="H4prime", **pp)
+    params.update(param_key=param_key(pp), grid=list(grid.shape),
+                  box=[float(v) for v in grid.lengths], dt=dt,
+                  k_rot=k_rot, lambda_roton=lam, d_droplet=d,
+                  min_inside=min_inside, backend=args.backend)
+    run = archive.new_run(tag, params=params)
 
     # ---- ground state: lattice seed, then L-BFGS polish -------------------
     Nt = float(grid.integrate(np.ones(grid.shape)))
@@ -320,7 +535,7 @@ def run_point(archive, args, scales, Ma, seed):
     solver.psi = solver.psi * grid.asarray(noise_host)
     solver.psi = solver.psi * np.sqrt(Nt / solver.norm())
 
-    n_stir = args.n_stir if args.n_stir > 0 else max(1, args.cells // 3)
+    n_stir = resolved_n_stir(args)
     V_stir, V0, radius = make_stirrers(grid, info["mu"], Ma, n_stir=n_stir,
                                        V0_factor=args.V0_factor)
     recs = []
@@ -373,7 +588,8 @@ def run_point(archive, args, scales, Ma, seed):
 
     Rs = [r["R"] for r in decay if np.isfinite(r["R"])]
     summary = dict(
-        Ma=Ma, seed=seed, contrast=contrast, mu=info["mu"],
+        Ma=Ma, seed=seed, cells=args.cells, T_stir=args.T_stir,
+        T_decay=args.T_decay, param_key=param_key(pp), contrast=contrast, mu=info["mu"],
         residual=info["residual"], dt=dt,
         R_at_decay_start=r["R"], nv_at_decay_start=r["nv"],
         nv_raw_at_decay_start=r["nv_raw"],
@@ -402,6 +618,154 @@ def run_point(archive, args, scales, Ma, seed):
     return summary
 
 
+# ------------------------------------------------------------ report
+def load_trackA_runs(project_dir):
+    """Every Track A run folder with a finished summary.
+
+    Matches folder names case-INSENSITIVELY: Archive slugs are lowercase
+    ('tracka-...'), and a '*trackA*' glob found nothing on Drive (Linux
+    paths are case-sensitive).  Identity comes from RUN_INFO.json params,
+    never from the folder name.
+    """
+    out = []
+    for d in sorted(glob.glob(os.path.join(project_dir, "*"))):
+        if "tracka" not in os.path.basename(d).lower():
+            continue
+        f_sum = os.path.join(d, "diagnostics", "summary.json")
+        f_info = os.path.join(d, "RUN_INFO.json")
+        if not (os.path.isfile(f_sum) and os.path.isfile(f_info)):
+            continue
+        try:
+            info = json.load(open(f_info))
+            summ = json.load(open(f_sum))[0]
+        except Exception as exc:
+            print("  !! unreadable run %s: %s" % (os.path.basename(d), exc))
+            continue
+        out.append(dict(dir=d, info=info, params=info.get("parameters", {}),
+                        summary=summ))
+    return out
+
+
+def implied_cells(nv, R):
+    """cells implied by R^2 nv = cells^2 sqrt(3)/2 (exact for this box)."""
+    if not nv or not R or not np.isfinite(R):
+        return float("nan")
+    return float(np.sqrt(R * R * nv / (np.sqrt(3) / 2)))
+
+
+def report(archive, args):
+    """Table of finished runs whose STORED params match the current settings.
+
+    Filters on every KEY_FIELDS entry except Ma and seed.  Rows whose
+    R^2*nv disagrees with the stored cell count are flagged, which catches
+    any future box mix-up (finding F1).  With --surrogates N, runs the
+    formal null test on each run's saved timeseries.json.
+    """
+    runs = load_trackA_runs(archive.project_dir)
+    print("Track A run folders with a summary: %d" % len(runs))
+    rows, rejected = {}, {}
+    for r in runs:
+        p = r["params"]
+        Ma, seed = p.get("Ma"), p.get("seed")
+        if Ma is None or seed is None:
+            continue
+        want = point_params(args, Ma, seed)
+        if not stored_matches(p, want):
+            why = ", ".join("%s=%s" % (k, p.get(k)) for k in
+                            ("cells", "T_stir", "T_decay", "V0_factor")
+                            if p.get(k) is not None and k in want
+                            and float(p.get(k)) != float(want[k]))
+            rejected.setdefault(why or "other params differ", []).append(
+                os.path.basename(r["dir"]))
+            continue
+        k = (round(float(Ma), 4), int(seed))
+        if k in rows:                       # duplicate: keep the newest
+            print("  note: duplicate point Ma=%.2f seed=%d -> keeping %s"
+                  % (k[0], k[1], os.path.basename(r["dir"])))
+        rows[k] = r
+    for why, ds in rejected.items():
+        print("  excluded %d run(s) with different params (%s)"
+              % (len(ds), why))
+    print("Matching cells=%d T_stir=%g T_decay=%g: %d point(s)\n"
+          % (args.cells, args.T_stir, args.T_decay, len(rows)))
+
+    hdr = ("%5s %4s %6s %7s %4s %4s %4s %4s %6s"
+           % ("Ma", "seed", "nv", "R", "ev2", "ev3", "ev4", "cons", "cellsR"))
+    if args.surrogates:
+        hdr += "  p_phase(3)  p_iaaft(3)"
+    print(hdr)
+    table = []
+    for (Ma, seed), r in sorted(rows.items()):
+        s = r["summary"]
+        a = s["avalanches"]
+        ic = implied_cells(s["nv_at_decay_start"], s["R_at_decay_start"])
+        cells_ok = abs(ic - args.cells) < 0.05 * args.cells
+        row = dict(Ma=Ma, seed=seed, nv_at_decay_start=s["nv_at_decay_start"],
+                   R_at_decay_start=round(s["R_at_decay_start"], 4),
+                   R_decay_min=s.get("R_decay_min"),
+                   events_theta2=a["theta_2.0"]["n_events"],
+                   events_theta3=a["theta_3.0"]["n_events"],
+                   events_theta4=a["theta_4.0"]["n_events"],
+                   conservative=s["conservative"],
+                   mask_trustworthy=s.get("mask_trustworthy"),
+                   implied_cells=round(ic, 2), cells_consistent=cells_ok,
+                   run_id=os.path.basename(r["dir"]))
+        line = ("%5.2f %4d %6d %7.3f %4d %4d %4d %4s %6.2f%s"
+                % (Ma, seed, row["nv_at_decay_start"], row["R_at_decay_start"],
+                   row["events_theta2"], row["events_theta3"],
+                   row["events_theta4"], "T" if row["conservative"] else "F",
+                   ic, "" if cells_ok else " !!BOX"))
+        if args.surrogates:
+            f_ts = os.path.join(r["dir"], "diagnostics", "timeseries.json")
+            try:
+                ts = [x for x in json.load(open(f_ts))
+                      if x.get("phase") == "decay"]
+                st = surrogate_test(ts, n_surr=args.surrogates, seed=seed)
+                for m in ("phase", "iaaft"):
+                    for th in ("2.0", "3.0", "4.0"):
+                        row["p_%s_theta%s" % (m, th[0])] = \
+                            st[m]["theta_" + th]["p"]
+                line += "  %10.3f  %10.3f" % (row["p_phase_theta3"],
+                                              row["p_iaaft_theta3"])
+            except Exception as exc:
+                line += "  (surrogate test failed: %s)" % exc
+        print(line)
+        table.append(row)
+
+    if table:
+        import csv
+        out = os.path.join(archive.project_dir,
+                           "trackA_results_c%d_Td%g.csv"
+                           % (args.cells, args.T_decay))
+        keys = list(dict.fromkeys(k for row in table for k in row))
+        with open(out, "w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=keys)
+            w.writeheader()
+            w.writerows(table)
+        print("\nwrote %s" % out)
+
+        # grouped means, R > 1 versus R <= 1, trusted rows only
+        good = [x for x in table if x["conservative"] and x["cells_consistent"]]
+        for name, sel in (("R > 1 ", [x for x in good
+                                      if x["R_at_decay_start"] > 1]),
+                          ("R <= 1", [x for x in good
+                                      if x["R_at_decay_start"] <= 1])):
+            if sel:
+                print("  %s: %2d runs  mean events th2=%.2f th3=%.2f th4=%.2f"
+                      % (name, len(sel),
+                         np.mean([x["events_theta2"] for x in sel]),
+                         np.mean([x["events_theta3"] for x in sel]),
+                         np.mean([x["events_theta4"] for x in sel])))
+        near = [x for x in good if 0.8 <= x["R_at_decay_start"] <= 1.3]
+        print("  runs with R in [0.8, 1.3] (the crossover): %d" % len(near))
+        if args.surrogates:
+            sig = [x for x in good if x.get("p_phase_theta3", 1) < 0.05]
+            print("  runs with p_phase(theta=3) < 0.05: %d of %d "
+                  "(about %.1f expected by chance)"
+                  % (len(sig), len(good), 0.05 * len(good)))
+    return table
+
+
 def main():
     args = parse_args()
     if args.quick:
@@ -424,12 +788,15 @@ def main():
     scales = roton_scales(args.eps_dd, args.l_z, gamma)
     k_rot, lam, d, min_inside = scales
 
+    from qtsim.drive_io import Archive
     if args.outdir:
-        from qtsim.drive_io import Archive
         archive = Archive(root=os.path.abspath(args.outdir), verbose=False)
     else:
-        from qtsim.drive_io import Archive
-        archive = Archive()
+        archive = Archive(verbose=False)
+
+    if args.report:
+        report(archive, args)
+        return
 
     print("=" * 66)
     print("TRACK A -- H4' frustration crossover (contradiction C8)")
@@ -452,8 +819,7 @@ def main():
     print("  R=2 -> nv=%.0f,  R=1.5 -> nv=%.0f,  R=0.7 -> nv=%.0f,"
           "  R=0.5 -> nv=%.0f"
           % (nv1 / 4, nv1 / 2.25, nv1 / 0.49, nv1 / 0.25))
-    print("  obstacles: %d (scaled from cells)"
-          % (args.n_stir if args.n_stir > 0 else max(1, args.cells // 3)))
+    print("  obstacles: %d (scaled from cells)" % resolved_n_stir(args))
     print("  The scan MUST bracket R=1.  Vortex yield depends on --drives,")
     print("  --V0_factor, --n_stir AND --cells together, so a drive list")
     print("  calibrated for one box size will NOT transfer to another.")
@@ -462,14 +828,18 @@ def main():
     print("  committing to the full scan.")
     print()
 
-    done = {r.get("title") for r in archive.load_index().get("runs", [])
-            if r.get("status", "").startswith("completed")}
+    finished = [r for r in archive.load_index().get("runs", [])
+                if r.get("status", "").startswith("completed")]
     results, t0 = [], time.time()
     for Ma in args.drives:
         for seed in args.seeds:
-            tag = "trackA Ma%.2f seed%d eps%.3f" % (Ma, seed, args.eps_dd)
-            if tag in done:
-                print("  [skip, already completed] %s" % tag, flush=True)
+            pp = point_params(args, Ma, seed)
+            tag = run_title(pp)
+            hit = next((r for r in finished
+                        if stored_matches(r.get("parameters"), pp)), None)
+            if hit is not None:
+                print("  [skip, already completed with identical params] "
+                      "%s  (%s)" % (tag, hit.get("run_id")), flush=True)
                 continue
             print("  Ma=%.2f seed=%d" % (Ma, seed), flush=True)
             try:
