@@ -613,13 +613,100 @@ def t12_backend_selection():
            "finite mu, finite residual, diagnostics run", ok)
 
 
+# ---------------------------------------------------------------- T13
+def t13_trackA_analysis():
+    """v2.6: Track A analysis fixes -- F3 MAD guard, F2 resume key, and the
+    formal surrogate null test (calibration under a Gaussian null and power
+    against injected bursts)."""
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from campaign import track_a_scan as T
+
+    t = np.arange(400) * 0.5
+    # T13a: flat series must not crash or report events
+    _, st = T._events_from_series(t, np.full(400, 0.3), 3.0)
+    record("T13a flat L(t): no events, no blow-up",
+           f"n_events={st['n_events']}, method={st['sigma_method']}",
+           "0 events, method 'flat'",
+           st["n_events"] == 0 and st["sigma_method"] == "flat")
+
+    # T13b: quantised staircase (MAD == 0).  The old MAD+1e-30 rule put the
+    # threshold at ~1e-30 so every nonzero drop was an event.
+    rng = np.random.default_rng(1)
+    jumps = np.zeros(400)
+    jumps[rng.choice(400, 40, replace=False)] = rng.choice([-1, 1], 40)
+    L = (300 + np.cumsum(jumps)) / 1e4
+    drop = -np.gradient(L, t)
+    old_thr = np.median(drop) + 3.0 * 1.4826 * (
+        np.median(np.abs(drop - np.median(drop))) + 1e-30)
+    old_n = int(np.sum(np.diff(np.r_[0, (drop > old_thr).astype(int)]) == 1))
+    _, st = T._events_from_series(t, L, 3.0)
+    record("T13b MAD==0 guard (quantised L): threshold not collapsed",
+           f"old thr={old_thr:.1e} ({old_n} ev) -> new thr={st['threshold']:.1e} "
+           f"({st['n_events']} ev, {st['sigma_method']})",
+           "method std_fallback and threshold > 1e-12",
+           st["sigma_method"] == "std_fallback" and st["threshold"] > 1e-12)
+
+    # T13c: calibration.  AR(1) Gaussian noise on a decaying trend has no
+    # bursts, so p < 0.05 should occur in ~5 percent of series.
+    nser, nsig = 40, 0
+    for k in range(nser):
+        r = np.random.default_rng(100 + k)
+        x = np.zeros(400)
+        for i in range(1, 400):
+            x[i] = 0.6 * x[i - 1] + r.standard_normal()
+        L = 0.02 * np.exp(-t / 300) + 2e-5 * x
+        recs = [dict(t=a, L=b) for a, b in zip(t, L)]
+        out = T.surrogate_test(recs, thetas=(3.0,), n_surr=99, seed=k,
+                               methods=("phase",))
+        nsig += out["phase"]["theta_3.0"]["p"] < 0.05
+    record("T13c surrogate test calibrated under Gaussian null",
+           f"{nsig}/{nser} series with p<0.05 ({100*nsig/nser:.0f}%)",
+           "<= 15% (nominal 5%)", nsig <= 0.15 * nser)
+
+    # T13d: power.  Same noise plus 8 sharp drops (avalanches).
+    r = np.random.default_rng(7)
+    x = np.zeros(400)
+    for i in range(1, 400):
+        x[i] = 0.6 * x[i - 1] + r.standard_normal()
+    steps = np.zeros(400)
+    steps[r.choice(np.arange(20, 380), 8, replace=False)] = 1.0
+    L = 0.02 * np.exp(-t / 300) + 2e-5 * x - 2e-4 * np.cumsum(steps)
+    recs = [dict(t=a, L=b) for a, b in zip(t, L)]
+    out = T.surrogate_test(recs, thetas=(3.0,), n_surr=199, seed=0,
+                           methods=("phase",))
+    pp = out["phase"]["theta_3.0"]
+    record("T13d surrogate test detects injected bursts",
+           f"observed={pp['observed']}, surrogate mean={pp['surr_mean']:.2f}, "
+           f"p={pp['p']:.3f}", "p < 0.05", pp["p"] < 0.05)
+
+    # T13e: resume key distinguishes box / decay time (finding F2)
+    class A:
+        eps_dd, l_z, n0_as3, cells, dx = 1.414, 8.6, 1.17e-4, 12, 0.5
+        T_stir, T_decay, sample_every, n_stir, V0_factor = 60., 200., .5, 0, 1.5
+    want = T.point_params(A, 0.6, 0)
+    quick = dict(want, track="A", cells=8, T_stir=15.0, T_decay=40.0,
+                 n_stir=2)
+    legacy = {k: v for k, v in dict(want, track="A").items()
+              if k not in ("dx", "sample_every")}
+    legacy.update(grid=[246, 214], box=[123.384, 106.854])
+    m_same = T.stored_matches(dict(want, track="A"), want)
+    m_quick = T.stored_matches(quick, want)
+    m_long = T.stored_matches(dict(want, track="A", T_decay=600.), want)
+    m_leg = T.stored_matches(legacy, want)
+    ok = (m_same and not m_quick and not m_long and m_leg
+          and T.param_key(want) != T.param_key(dict(want, T_decay=600.)))
+    record("T13e resume key: 8-cell / T_decay=600 runs not treated as done",
+           f"same={m_same}, quick8={m_quick}, Td600={m_long}, legacy={m_leg}",
+           "only identical params match", ok)
+
+
 if __name__ == "__main__":
     t_start = time.time()
     for t in (t1_plane_wave, t2_order, t3_thomas_fermi, t4_q5,
               t5_kernels, t6_vortex, t7_long_time_stability,
               t8_quasi2d_kernel, t9_conservation_laws,
               t10_minimizer, t11_vortex_detection_in_voids,
-              t12_backend_selection):
+              t12_backend_selection, t13_trackA_analysis):
         t()
     npass = sum(1 for *_, p in RESULTS if p)
     print(f"\n== {npass}/{len(RESULTS)} checks passed "
