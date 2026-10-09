@@ -1,6 +1,7 @@
 # Roadmap to publication
 
-Current position: **Step 1 complete** — solver built, 45/45 validation checks
+Current position (v2.6): **Track A 12-cell scan done; crossover gap and
+null test being filled.**  Earlier: **Step 1 complete** — solver built, 45/45 validation checks
 passing, all notebook cells execution-tested.
 
 ## Step 1.5 — DESIGN REPAIR (new, blocking)   ~1-2 weeks
@@ -10,6 +11,17 @@ parameter.  PHASE4_REVISED.md rebuilds the design.  Remaining:
 - [ ] Obtain Poli et al. PRL 131, 223401 full text (other half of C8)
 - [ ] Obtain a measured droplet spacing to close V4
 - [ ] Implement Track B trapped few-droplet geometry
+
+## Step 1.97 — Track A analysis fixes (v2.6)
+- [x] Resume key on the full physical-parameter set (finding F2)
+- [x] F1 confirmed: the two 8-cell rows are `--quick` smoke-test runs
+- [x] `--report`: filter on stored params, box check, CSV
+- [x] Formal null test: phase-randomised + IAAFT surrogates, p per run
+- [x] MAD == 0 guard in `detect_avalanches` (finding F3)
+- [ ] Colab: re-run the full 12-cell scan command once -- only the two
+      missing points (Ma 0.6 / 2.4, seed 0) will run; then Cell 7
+- [ ] Colab Cell 8: gap-fill drives 0.65-0.80 x 3 seeds (R 0.8-1.3)
+- [ ] Colab Cell 8: T_decay = 600 for Ma 0.6, 0.9, 1.3 + gap drives
 
 ## Step 1.95 — track_a_scan.py GPU port (v2.5, fixed on a real crash)
 - [x] Five host/device mixing bugs found and fixed in the campaign script
@@ -22,7 +34,7 @@ parameter.  PHASE4_REVISED.md rebuilds the design.  Remaining:
       GPU module to prove the abstraction has no gaps
 - [x] Fixed a real regression: the sequential notebook test harness had
       been silently broken since v1.4 outside Colab
-- [ ] Run Cell 7 on real Colab GPU hardware; record actual speedup
+- [ ] Run Cell 9 (was Cell 7 before v2.6) on real Colab GPU hardware; record actual speedup
 - [ ] Re-run Track A at `--backend gpu` once confirmed working
 
 ## Step 1.75 — TRACK A: the H4' scan (READY TO RUN)   ~2-4 weeks

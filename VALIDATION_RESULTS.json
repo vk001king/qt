@@ -97,7 +97,7 @@
  },
  {
   "name": "T6 |dN|/N over 500 steps",
-  "value": "5.79e-14",
+  "value": "5.57e-14",
   "criterion": "< 1e-12",
   "pass": true
  },
@@ -127,7 +127,7 @@
  },
  {
   "name": "T7d norm drift to t=60",
-  "value": "5.81e-13",
+  "value": "5.88e-13",
   "criterion": "< 1e-10",
   "pass": true
  },
@@ -211,13 +211,13 @@
  },
  {
   "name": "T10b L-BFGS improves the residual",
-  "value": "5.41e-02 -> 7.54e-07",
+  "value": "5.41e-02 -> 7.60e-07",
   "criterion": "residual improves by >10x",
   "pass": true
  },
  {
   "name": "T10c norm preserved by the minimiser",
-  "value": "1.89e-16",
+  "value": "0.00e+00",
   "criterion": "< 1e-10",
   "pass": true
  },
@@ -267,6 +267,36 @@
   "name": "T12d full pipeline on explicit backend='cpu'",
   "value": "mu=5.2716, residual=1.86e-04, masked_vortices=0",
   "criterion": "finite mu, finite residual, diagnostics run",
+  "pass": true
+ },
+ {
+  "name": "T13a flat L(t): no events, no blow-up",
+  "value": "n_events=0, method=flat",
+  "criterion": "0 events, method 'flat'",
+  "pass": true
+ },
+ {
+  "name": "T13b MAD==0 guard (quantised L): threshold not collapsed",
+  "value": "old thr=4.4e-30 (21 ev) -> new thr=1.3e-04 (0 ev, std_fallback)",
+  "criterion": "method std_fallback and threshold > 1e-12",
+  "pass": true
+ },
+ {
+  "name": "T13c surrogate test calibrated under Gaussian null",
+  "value": "1/40 series with p<0.05 (2%)",
+  "criterion": "<= 15% (nominal 5%)",
+  "pass": true
+ },
+ {
+  "name": "T13d surrogate test detects injected bursts",
+  "value": "observed=7, surrogate mean=0.56, p=0.005",
+  "criterion": "p < 0.05",
+  "pass": true
+ },
+ {
+  "name": "T13e resume key: 8-cell / T_decay=600 runs not treated as done",
+  "value": "same=True, quick8=False, Td600=False, legacy=True",
+  "criterion": "only identical params match",
   "pass": true
  }
 ]

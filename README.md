@@ -4,8 +4,8 @@
 
 A validated pseudo-spectral solver for the **extended Gross–Pitaevskii equation** (eGPE) with dipolar interactions and Lee–Huang–Yang corrections, built to study vortex-tangle quantum turbulence in dipolar supersolids.
 
-**Status:** v2.5. 45/45 validation checks passing. All 6 core notebook cells
-verified by execution at **full length** (no shortened loops); a 7th, optional
+**Status:** v2.6. 50/50 validation checks passing. All 8 core notebook cells
+verified by execution at **full length** (no shortened loops); a 9th, optional
 cell verifies the GPU backend and is skipped automatically when no GPU is present.
 
 Version history is summarised below, newest first; the *Bug history* section
@@ -250,7 +250,7 @@ Higher validation rungs (comparison against published ¹⁶⁴Dy results, glitch
 
 ---
 
-## v2.0 – v2.5: redesigned experiment, Track A scan, GPU backend
+## v2.0 – v2.6: redesigned experiment, Track A scan, GPU backend
 
 **v2.0 — Phase 4 redesigned; C8 identified.** With H1 inverted (v1.8), the
 original pinning-threshold question no longer held. A second source read
@@ -279,6 +279,15 @@ notebook test harness had been silently broken outside Colab since v1.4.
 campaign scripts; five host/device mixing bugs in `track_a_scan.py` were
 found and fixed. The remaining open item is a real-hardware GPU run to
 confirm the port and record an actual speedup — see `ROADMAP.md`.
+
+**v2.6 — Track A analysis fixes.** The resume key matched finished points by
+`Ma`/`seed`/`eps_dd` only, so two `--quick` 8-cell smoke-test runs stood in
+for 12-cell points of the 24-point scan; points are now matched on every
+physical parameter. New `--report` mode filters on stored parameters, checks
+the box via `R^2 nv = cells^2 sqrt(3)/2`, and runs a phase-randomised and an
+IAAFT surrogate null test (p-value per run). `detect_avalanches` no longer
+collapses when the MAD is zero. Notebook Cells 7–8 read the results and run
+the gap-fill and long-decay scans. See `FLAGS.md`.
 
 ---
 

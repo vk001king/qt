@@ -8,7 +8,7 @@ Adaptations for the sandbox (no Colab, no GPU, limited time):
     so that assertion would otherwise halt every local/CI run at cell 1.
     This bypass changes NOTHING about where files are written; it only
     lets execution proceed so the rest of the notebook can be exercised.
-  * the optional GPU verification cell (Cell 7) requires real CuPy and a
+  * the optional GPU verification cell (Cell 9, last cell) requires real CuPy and a
     real CUDA device, neither of which exist here; it is executed and
     expected to exit cleanly via its own SystemExit, which is reported as
     SKIPPED rather than counted as a pass or a failure.

@@ -381,7 +381,7 @@ not abstract-only as in Phase 1.
       stay on CPU semantics.  This does NOT test real CUDA numerics or
       timing; Cell 7 of the notebook is the honest, undone check against
       real hardware, and states plainly that it was never run against one.
-- [ ] **NOT YET DONE: run Cell 7 against a real GPU.**  Speedup, real CUDA
+- [ ] **NOT YET DONE: run the GPU cell (Cell 9 since v2.6) against a real GPU.**  Speedup, real CUDA
       numerical agreement (last-ULP differences from different reduction
       order ARE expected there and must be distinguished from a real bug),
       and the actual throughput floor from the per-iteration host<->device
@@ -501,3 +501,60 @@ strong:
       `track_a_scan.py --backend gpu` on real Colab GPU hardware.** This
       is fast and cheap for the user to do right now and is the
       recommended next step over further investment in test-double fidelity.
+
+
+## v2.6: Track A analysis -- resume-key bug, MAD guard, formal null test
+
+Found while reading the completed 24-point Track A table (2026-10-09).
+
+- [x] **F2, resume-key bug (real, explains F1).** `main()` treated a point
+      as finished if ANY completed run had the title
+      `"trackA Ma%.2f seed%d eps%.3f"`.  The title ignores cells, T_stir,
+      T_decay, dx, l_z, n0_as3, V0_factor, n_stir and sample_every.
+      Points are now matched on all of these (`KEY_FIELDS`,
+      `stored_matches()`), compared against the parameters each run
+      stored at `archive.new_run`.  Pre-v2.6 runs lack dx and sample_every:
+      dx is recovered from the stored box/grid, sample_every defaults to
+      the v2.5 value 0.5; anything else missing means "re-run", never
+      "skip".  Titles now carry cells, T_decay and a 10-digit parameter
+      hash (`c12 Td200 k<hash>`).  Regression test T13e.
+- [x] **F1 confirmed by reproduction.** The rows Ma=0.60 seed 0 (nv 15,
+      R 1.922) and Ma=2.40 seed 0 (nv 122, R 0.674) give
+      R^2 nv = 55.4, i.e. an 8-cell box.  `--quick` uses exactly
+      cells=8, T_stir=15, T_decay=40 and default drives [0.6, 2.4], seed 0.
+      Running `--quick --drives 0.6` locally on CPU reproduces nv=15,
+      R=1.922, events 3/1/0 at theta 2/3/4 -- identical to the table row.
+      So both rows are smoke-test runs, picked up by the F2 key, and
+      the corresponding 12-cell points were never run.  The new key will
+      run them.  The "2.40 outlier" is not a nucleation failure.
+- [x] **F3, MAD == 0 collapse.** `detect_avalanches` used MAD + 1e-30.
+      With a quantised vortex count, most -dL/dt samples can be identical
+      and the threshold fell to ~1e-30 (T13b: 21 spurious events on a
+      random +-1 staircase).  Now: MAD -> std fallback -> "flat, no
+      events", with the method stored as `sigma_method`.  T13a, T13b.
+- [x] `np.trapezoid` exists only in NumPy >= 2.0 while requirements allow
+      >= 1.21; falls back to `np.trapz`.
+- [x] **Formal null test** (`surrogate_test`).  For each run, 199
+      phase-randomised (null: linear Gaussian process with the same
+      spectrum) and 199 IAAFT surrogates (null: same, through a static
+      monotone transform -- keeps the integer steps of L(t)) of the
+      end-point-detrended L(t), the same detector on each, one-sided
+      p = (1 + #{surr >= obs}) / (1 + n).  A plain shuffle is not offered:
+      it only tests temporal clustering.  Calibration T13c: 1/40 AR(1)
+      Gaussian series at p < 0.05.  Power T13d: 8 injected drops give
+      p = 0.005 (the minimum for 199 surrogates).
+- [x] **Results reader** (`--report`): globs folders case-insensitively
+      (`tracka` slugs; the old `*trackA*` pattern found nothing), filters
+      on STORED params, flags any row whose R^2 nv implies a different box
+      (`!!BOX`), writes `trackA_results_c<cells>_Td<T_decay>.csv` next to
+      the runs, and prints the R > 1 / R <= 1 group means.
+- [x] Notebook: new Cell 7 (results + null test, read-only) and Cell 8
+      (gap-fill drives 0.65-0.80 and T_decay = 600 long decay, both off by
+      default).  GPU cell is now Cell 9.  The validation suite is 50 checks.
+- [ ] **Run on Colab:** Cell 7 on the existing data (confirms F1 from the
+      stored params on Drive), then Cell 8.  The two missing 12-cell points
+      (Ma 0.6 and 2.4, seed 0) will be run by any full-scan invocation.
+- [ ] Known limitation: with nv < ~20 the masked count flickers by +-1,
+      so L(t) is strongly quantised; the IAAFT p-value is the one to quote
+      there, and those rows stay below the trust floor regardless.
+
