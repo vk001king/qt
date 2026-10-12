@@ -724,13 +724,152 @@ def t13_trackA_analysis():
            "only identical params match", ok)
 
 
+# ---------------------------------------------------------------- T14
+def _synthetic_decay(rng, t, N0=250, a=2e-4, burst=False, flicker=0.0):
+    """Masked-count series nv(t) for a Vinen-like decay dN/dt = -a N^2.
+
+    burst=False: pair annihilations are an inhomogeneous Poisson process
+    with exactly that mean rate (H0 of the matched test).
+    burst=True : the same mean decay delivered as avalanches of 2-6 pairs
+    landing within 1-2 samples (H1).
+    flicker    : fraction of samples given a +-1/+-2 one-sample mask error.
+    """
+    mean = N0 / (1 + a * N0 * (t - t[0]))
+    inc = np.diff((mean[0] - mean) / 2)
+    if not burst:
+        c = rng.poisson(inc)
+    else:
+        c = np.zeros(len(inc), int)
+        k = rng.poisson(inc / 4.0)
+        for i in np.nonzero(k)[0]:
+            for _ in range(k[i]):
+                c[min(len(c) - 1, i + rng.integers(0, 3))] += rng.integers(2, 7)
+    nv = (N0 - 2 * np.r_[0, np.cumsum(c)]).astype(float)
+    if flicker:
+        m = rng.random(len(nv)) < flicker
+        nv[m] += rng.choice([-2, -1, 1, 2], m.sum())
+    return [dict(t=float(x), nv=float(y), L=float(y) / 1e4, phase="decay")
+            for x, y in zip(t, nv)]
+
+
+def t14_matched_null():
+    """v2.7: annihilation waiting-time test against an inhomogeneous-Poisson
+    null with the run's own (monotone, Grenander) rate."""
+    from campaign import track_a_scan as T
+    import tempfile
+    t = np.arange(401) * 0.5
+
+    # T14a: event extraction is exact on a staircase with mask flicker
+    nv = np.full(401, 100.0)
+    drops = [40, 41, 150, 300]                       # 4 annihilations
+    for d in drops:
+        nv[d:] -= 2
+    nv[100] += 2; nv[200] -= 2; nv[250] += 1          # one-sample flicker
+    c, info = T.annihilation_events(t, nv, med_win=3)
+    where = np.nonzero(c)[0] + 1
+    ok = (info["n_pairs"] == 4 and list(np.repeat(where, c[c > 0])) == drops)
+    record("T14a pair extraction exact despite one-sample mask flicker",
+           f"pairs={info['n_pairs']} at samples {[int(x) for x in np.repeat(where, c[c > 0])]}"
+           f", flicker={info['flicker']:.2f}", f"4 pairs at {drops}", ok)
+
+    # T14b: LCM is a concave majorant through both end points
+    r = np.random.default_rng(3)
+    C = np.r_[0, np.cumsum(r.poisson(np.linspace(2, 0.05, 400)))]
+    Lm = T._lcm(t, C)
+    slopes = np.diff(Lm) / np.diff(t)
+    ok = (np.all(Lm >= C - 1e-9) and np.all(np.diff(slopes) <= 1e-9)
+          and Lm[0] == C[0] and Lm[-1] == C[-1])
+    record("T14b Grenander rate: concave majorant, ends pinned",
+           f"min(LCM-C)={np.min(Lm - C):.2e}, max d(slope)={np.max(np.diff(slopes)):.1e}",
+           ">=0, <=0, ends equal", ok)
+
+    # T14c: the UNMATCHED (constant-rate) null is fooled by decay alone
+    hits = sum(T.waiting_time_test(_synthetic_decay(np.random.default_rng(
+        200 + k), t), n_surr=49, seed=k, rate="const")["p_cv"] < 0.05
+        for k in range(20))
+    record("T14c constant-rate null rejects pure decaying Poisson (why "
+           "matching matters)", f"{hits}/20 p<0.05", ">= 18/20", hits >= 18)
+
+    # T14d: calibration of the MATCHED null on H0 data: two decay speeds,
+    # half the series with 5 percent mask flicker
+    ps = []
+    for k in range(60):
+        kw = dict(N0=300, a=1e-3) if k % 2 else {}
+        if k % 4 < 2:
+            kw["flicker"] = 0.05
+        ps.append(T.waiting_time_test(_synthetic_decay(
+            np.random.default_rng(300 + k), t, **kw), n_surr=99, seed=k)["p_cv"])
+    ps = np.array(ps)
+    k05 = int(np.sum(ps < 0.05))
+    record("T14d matched null calibrated (60 H0 series, flicker, 2 rates)",
+           f"{k05}/60 p<0.05, median p={np.median(ps):.2f}",
+           "<= 8/60 (nominal 3; P(>=9)=0.003), median 0.35-0.65",
+           k05 <= 8 and 0.35 <= np.median(ps) <= 0.65)
+
+    # T14e: power against avalanches with the SAME mean decay
+    ps = [T.waiting_time_test(_synthetic_decay(np.random.default_rng(
+        400 + k), t, burst=True), n_surr=99, seed=k)["p_cv"] for k in range(20)]
+    hits = int(np.sum(np.array(ps) < 0.05))
+    record("T14e matched null detects avalanches at equal mean rate",
+           f"{hits}/20 p<0.05", ">= 18/20", hits >= 18)
+
+    # T14f: degenerate input -- no crash, explicit note, nan p
+    flat = [dict(t=float(x), nv=40.0) for x in t]
+    few = _synthetic_decay(np.random.default_rng(1), t, N0=12, a=1e-4)
+    o1 = T.waiting_time_test(flat, n_surr=19)
+    o2 = T.waiting_time_test(few, n_surr=19)
+    ok = (o1["note"] == "too few events" and np.isnan(o1["p_cv"])
+          and o2["note"] == "too few events")
+    record("T14f flat / sparse series: 'too few events', p=nan",
+           f"flat: {o1['note']!r}, sparse ({o2['n_pairs']} pairs): {o2['note']!r}",
+           "both flagged", ok)
+
+    # T14g: --report end to end on a throwaway local archive
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = os.path.join(tmp, "Research", "Quantum_Turbulence")
+
+        class A:
+            eps_dd, l_z, n0_as3, cells, dx = 1.414, 8.6, 1.17e-4, 12, 0.5
+            T_stir, T_decay, sample_every, n_stir, V0_factor = 60., 200., .5, 0, 1.5
+            surrogates = 39
+
+        class Arch:
+            project_dir = proj
+        for i, (Ma, burst) in enumerate(((0.6, False), (0.9, True))):
+            d = os.path.join(proj, "2026-10-12_000%d_tracka-test" % i)
+            os.makedirs(os.path.join(d, "diagnostics"))
+            pp = dict(T.point_params(A, Ma, 0), track="A")
+            recs = _synthetic_decay(np.random.default_rng(i), t, burst=burst)
+            json.dump(dict(parameters=pp), open(os.path.join(d, "RUN_INFO.json"), "w"))
+            json.dump(recs, open(os.path.join(d, "diagnostics", "timeseries.json"), "w"))
+            ev = {"theta_%.1f" % th: dict(n_events=0) for th in (2., 3., 4.)}
+            area = 12 * 12 * np.sqrt(3) / 2 * 50.0 ** 2
+            nv0 = recs[0]["nv"]
+            json.dump([dict(nv_at_decay_start=nv0, R_at_decay_start=float(
+                np.sqrt(12 * 12 * np.sqrt(3) / 2 / nv0)), conservative=True,
+                avalanches=ev)], open(os.path.join(d, "diagnostics", "summary.json"), "w"))
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            table = T.report(Arch, A)
+        csvf = os.path.join(proj, "trackA_results_c12_Td200.csv")
+        head = open(csvf).readline() if os.path.isfile(csvf) else ""
+        ok = (len(table) == 2 and "p_wt_cv" in head
+              and "MATCHED NULL" in buf.getvalue()
+              and table[1]["p_wt_cv"] < 0.05 <= table[0]["p_wt_cv"])
+    record("T14g --report: matched-null columns in table and CSV",
+           f"rows={len(table)}, p_wt_cv H0={table[0].get('p_wt_cv')}, "
+           f"burst={table[1].get('p_wt_cv')}", "2 rows, burst p<0.05<=H0 p", ok)
+
+
 if __name__ == "__main__":
     t_start = time.time()
     for t in (t1_plane_wave, t2_order, t3_thomas_fermi, t4_q5,
               t5_kernels, t6_vortex, t7_long_time_stability,
               t8_quasi2d_kernel, t9_conservation_laws,
               t10_minimizer, t11_vortex_detection_in_voids,
-              t12_backend_selection, t13_trackA_analysis):
+              t12_backend_selection, t13_trackA_analysis,
+              t14_matched_null):
         t()
     npass = sum(1 for *_, p in RESULTS if p)
     print(f"\n== {npass}/{len(RESULTS)} checks passed "
