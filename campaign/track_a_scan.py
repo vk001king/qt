@@ -413,6 +413,251 @@ def surrogate_test(recs, thetas=(2.0, 3.0, 4.0), n_surr=199, seed=0,
     return out
 
 
+# ------------------------------------- matched null: annihilation clustering
+# v2.7 (handoff step 2).  The phase / IAAFT surrogates above model L(t) as a
+# continuous Gaussian signal.  The masked vortex count is not that: it is an
+# integer staircase that only steps DOWN (pair annihilation) apart from mask
+# flicker, and over a long decay its step rate falls steeply.  The phase
+# null flagged 5/6 long-decay runs while IAAFT flagged 1/6, which points at
+# a mis-specified null rather than physics.
+#
+# The physically matched question is: are annihilations CLUSTERED in time
+# beyond what a time-varying rate alone produces?  So:
+#
+#   events   each pair annihilation = one event (masked count falls by 2),
+#            located to the sampling interval in which it happened.
+#   null H0  inhomogeneous Poisson process whose rate lambda(t) is estimated
+#            from the run itself -- same total count, same slow decay of
+#            the rate, no clustering beyond that.
+#   rate     least concave majorant (LCM) of the cumulative event count =
+#            Grenander maximum-likelihood estimate of a NON-INCREASING
+#            rate.  Its only assumption is that annihilation slows down as
+#            the tangle thins.  A burst after a quiet stretch is bridged by
+#            a chord of the majorant, so it is NOT absorbed into the rate.
+#   statistic  time-rescaling theorem: u = Lambda(t) turns the null into a
+#            unit-rate Poisson process, whose waiting times are Exp(1), so
+#            CV = 1 and burstiness B = (CV-1)/(CV+1) = 0.  Clustering gives
+#            CV > 1, B > 0.  Shinomoto's local variation LV (= 1 for Poisson
+#            at any slowly varying rate) is kept as a cross-check.
+#   p-value  parametric bootstrap conditioned on the event count: surrogate
+#            counts ~ Multinomial(N, Lambda-increments) on the SAME sampling
+#            grid, drawn from the LCM smoothed over 8 expected events (raw
+#            Grenander bootstrap is inconsistent, see _smooth_cum_rate), and
+#            the rate is RE-ESTIMATED on every surrogate, so the estimation
+#            step is inside the null distribution.  One-sided upper p with
+#            the +1 correction, as in surrogate_test.
+def annihilation_events(t, nv, med_win=3):
+    """Pair-annihilation counts per sampling interval from a masked count.
+
+    Mask flicker (a vortex dropping out of the mask for one sample, then
+    back) would otherwise create a fake drop-and-recover.  Two steps:
+      1. running median over `med_win` samples (odd; 1 = off) removes
+         isolated one-sample spikes in either direction;
+      2. running minimum: in free decay the vortex number cannot rise, so
+         any remaining upward step is mask noise and is not undone later.
+    Cumulative pairs C_k = floor((env_0 - env_k)/2); odd masked drops
+    (a vortex leaving the mask) accumulate until a full pair is removed.
+
+    Returns (counts, info): counts[k] = pairs annihilated in (t_k, t_k+1].
+    info['flicker'] is the fraction of RAW sample-to-sample steps that go
+    UP -- a direct measure of how noisy the masked count is.
+    """
+    nv = np.asarray(nv, dtype=float)
+    n = len(nv)
+    if med_win > 1 and n >= med_win:
+        h = med_win // 2
+        pad = np.r_[np.full(h, nv[0]), nv, np.full(h, nv[-1])]
+        win = np.lib.stride_tricks.sliding_window_view(pad, med_win)
+        filt = np.median(win, axis=1)
+    else:
+        filt = nv.copy()
+    env = np.minimum.accumulate(filt)
+    C = np.floor((env[0] - env) / 2.0 + 1e-9)
+    counts = np.diff(C).astype(int)
+    steps = np.diff(nv)
+    nz = steps[steps != 0]
+    info = dict(n_pairs=int(counts.sum()),
+                flicker=float(np.mean(nz > 0)) if len(nz) else 0.0,
+                nv_start=float(nv[0]), nv_end=float(nv[-1]),
+                med_win=int(med_win))
+    return counts, info
+
+
+def _lcm(x, y):
+    """Least concave majorant of points (x, y), x increasing; values at x.
+
+    Upper convex hull by Andrew's monotone chain, O(n).
+    """
+    hx, hy = [x[0]], [y[0]]
+    for xi, yi in zip(x[1:], y[1:]):
+        while len(hx) >= 2 and ((hy[-1] - hy[-2]) * (xi - hx[-2])
+                                <= (yi - hy[-2]) * (hx[-1] - hx[-2])):
+            hx.pop()
+            hy.pop()
+        hx.append(xi)
+        hy.append(yi)
+    return np.interp(x, hx, hy)
+
+
+def _cum_rate(t, counts, rate="lcm"):
+    """Estimated cumulative intensity Lambda at the sample times t.
+
+    rate='lcm'    Grenander (non-increasing rate) -- the matched null.
+    rate='const'  homogeneous Poisson -- the UNMATCHED null, kept only to
+                  show how much a decaying rate alone inflates the CV.
+    (A Gaussian-kernel rate with a fixed bandwidth was tried and dropped:
+    when the early decay is faster than the bandwidth it flattens the
+    initial peak and gave 78 percent false positives on synthetic data.)
+    Lambda(t_0) = 0 and Lambda(t_end) = total count in both cases.
+    """
+    C = np.r_[0.0, np.cumsum(counts)]
+    N = C[-1]
+    if N == 0:
+        return C
+    if rate == "lcm":
+        return _lcm(t, C)
+    if rate == "const":
+        return N * (t - t[0]) / (t[-1] - t[0])
+    raise ValueError("rate must be 'lcm' or 'const'")
+
+
+def _smooth_cum_rate(t, Lam, h_events):
+    """Smooth a concave Lambda(t) with a bandwidth of `h_events` EXPECTED
+    events, i.e. in rescaled time, so the smoothing is scale-free: fine
+    where annihilations are frequent (early), coarse where rare (late).
+
+    Done on the inverse t(u), which is convex for concave Lambda; Gaussian
+    convolution keeps it convex, so the smoothed rate stays non-increasing.
+    The ends are extended linearly with the exact one-sided slopes 1/lambda
+    (this preserves convexity).  The flat tail after the last annihilation
+    keeps rate 0, as in the LCM.
+
+    WHY: bootstrapping from the raw Grenander estimate is inconsistent
+    (Kosorok 2008; Sen, Banerjee & Woodroofe, Ann. Stat. 38, 1953 (2010))
+    -- its rate jumps put extra variance into every surrogate.  Measured on
+    synthetic H0 series: mean p 0.60-0.64 unsmoothed versus 0.49-0.58 with
+    h = 8 events, while power against avalanches stays 20/20.
+    """
+    N = float(Lam[-1])
+    h = min(float(h_events), N / 8.0)
+    if h <= 0 or N <= 0:
+        return Lam
+    j = int(np.searchsorted(Lam, N - 1e-9 * N))     # first index at N
+    tt, LL = t[:j + 1], Lam[:j + 1]
+    keep = np.r_[True, np.diff(LL) > 0]
+    tt, LL = tt[keep], LL[keep]
+    if len(tt) < 3:
+        return Lam
+    du = min(0.05, h / 20.0)
+    u = np.arange(0.0, N + 0.5 * du, du)
+    tu = np.interp(u, LL, tt)
+    s0 = (tt[1] - tt[0]) / (LL[1] - LL[0])          # dt/du at u = 0
+    s1 = (tt[-1] - tt[-2]) / (LL[-1] - LL[-2])      # dt/du at u = N
+    npad = int(np.ceil(4 * h / du))
+    k = np.arange(1, npad + 1) * du
+    ext = np.r_[tu[0] - s0 * k[::-1], tu, tu[-1] + s1 * k]
+    ker = np.exp(-0.5 * (np.arange(-npad, npad + 1) * du / h) ** 2)
+    ts = np.convolve(ext, ker / ker.sum(), mode="valid")
+    Ls = np.interp(t, ts, u, left=0.0, right=N)
+    Ls = Ls - Ls[0]
+    return Ls * (N / Ls[-1]) if Ls[-1] > 0 else Lam
+
+
+def _clustering_stats(counts, Lam, rng, n_jitter=4):
+    """CV, burstiness B and local variation LV of rescaled waiting times.
+
+    Events in interval (t_k, t_k+1] are placed uniformly at random in
+    rescaled time between Lambda(t_k) and Lambda(t_k+1).  Given the count
+    in a bin, the event times of an inhomogeneous Poisson process are iid
+    with density proportional to lambda, i.e. UNIFORM in rescaled time, so
+    this reconstructs the continuous process exactly under H0 and removes
+    the zero waiting times that 0.5-tau sampling would otherwise create.
+    (Placing all events of a bin at the bin edge made the test strongly
+    conservative: 1 percent rejections at nominal 5.)  Statistics are
+    averaged over `n_jitter` placements; the same is done for surrogates.
+
+      CV = std(w)/mean(w)                     Poisson: 1, bursty: > 1
+      B  = (CV-1)/(CV+1)  (Goh & Barabasi 2008)   Poisson: 0
+      LV = 3/(n-1) sum ((w_i-w_i+1)/(w_i+w_i+1))^2  (Shinomoto 2003)
+           Poisson: 1 for ANY slowly varying rate, so it is a cross-check
+           that does not lean on the rate estimate.
+    """
+    if int(counts.sum()) < 6:
+        return dict(cv=float("nan"), B=float("nan"), lv=float("nan"))
+    lo = np.repeat(Lam[:-1], counts)
+    hi = np.repeat(Lam[1:], counts)
+    cv, lv = 0.0, 0.0
+    for _ in range(n_jitter):
+        u = np.sort(lo + (hi - lo) * rng.random(len(lo)))
+        w = np.diff(u)
+        cv += w.std() / w.mean()
+        s = w[1:] + w[:-1]
+        lv += 3.0 * np.mean(((w[1:] - w[:-1]) / np.where(s > 0, s, 1)) ** 2)
+    cv, lv = cv / n_jitter, lv / n_jitter
+    return dict(cv=float(cv), B=float((cv - 1) / (cv + 1)), lv=float(lv))
+
+
+def waiting_time_test(recs, n_surr=199, seed=0, rate="lcm", med_win=3,
+                      n_jitter=4, min_pairs=6, smooth_events=8.0):
+    """Annihilation-clustering test of ONE run against a matched Poisson null.
+
+    `recs` are decay-phase timeseries records with keys 't' and 'nv'.
+    Returns the observed CV, B and LV, their bootstrap null means, and
+    one-sided p-values: p_cv (clustering, CV high; the headline),
+    p_cv_low (regularity, CV low) and p_lv (LV high).  Runs with fewer
+    than `min_pairs` annihilations return p = nan, note='too few events'.
+    Cost: n_surr x O(n): about 1 s for 199 surrogates of 400 samples.
+    """
+    t = np.array([r["t"] for r in recs], dtype=float)
+    nv = np.array([r["nv"] for r in recs], dtype=float)
+    nan = float("nan")
+    base = dict(rate=rate, med_win=int(med_win), n_surr=int(n_surr),
+                n_jitter=int(n_jitter), smooth_events=float(smooth_events))
+    empty = dict(cv=nan, B=nan, lv=nan, p_cv=nan, p_cv_low=nan, p_lv=nan)
+    if len(t) < 8:
+        return dict(base, n_pairs=0, note="too few samples", **empty)
+    counts, info = annihilation_events(t, nv, med_win)
+    base.update(info)
+    N = info["n_pairs"]
+    if N < min_pairs:
+        return dict(base, note="too few events", **empty)
+    rng = np.random.default_rng(seed)
+    Lam = _cum_rate(t, counts, rate)
+    obs = _clustering_stats(counts, Lam, rng, n_jitter)
+    Lgen = (_smooth_cum_rate(t, Lam, smooth_events) if rate == "lcm"
+            else Lam)
+    prob = np.clip(np.diff(Lgen), 0.0, None)
+    prob = prob / prob.sum()
+    sc, sl = np.empty(n_surr), np.empty(n_surr)
+    for i in range(n_surr):
+        cs = rng.multinomial(N, prob)
+        st = _clustering_stats(cs, _cum_rate(t, cs, rate), rng, n_jitter)
+        sc[i], sl[i] = st["cv"], st["lv"]
+    P = lambda k: float((1 + k) / (1 + n_surr))
+    return dict(base, note="", cv=obs["cv"], B=obs["B"], lv=obs["lv"],
+                cv_null_mean=float(sc.mean()), cv_null_std=float(sc.std()),
+                lv_null_mean=float(sl.mean()),
+                p_cv=P(np.sum(sc >= obs["cv"])),
+                p_cv_low=P(np.sum(sc <= obs["cv"])),
+                p_lv=P(np.sum(sl >= obs["lv"])))
+
+
+def binom_tail(k, n, p=0.05):
+    """P(X >= k) for X ~ Binomial(n, p): chance of k or more 'hits'."""
+    from math import comb
+    return float(sum(comb(n, j) * p ** j * (1 - p) ** (n - j)
+                     for j in range(k, n + 1)))
+
+
+def fisher_combined(ps):
+    """Fisher's combined p over independent runs (nan entries ignored)."""
+    from scipy.stats import chi2
+    ps = np.array([p for p in ps if p is not None and np.isfinite(p)])
+    if len(ps) == 0:
+        return float("nan"), 0
+    return float(chi2.sf(-2 * np.sum(np.log(ps)), 2 * len(ps))), len(ps)
+
+
 # ------------------------------------------------- resume key (fix F2)
 # Every input that changes the PHYSICS or the MEASUREMENT of a point.
 # BUG FIX (v2.6, finding F2): completed points used to be matched by the
@@ -653,6 +898,45 @@ def implied_cells(nv, R):
     return float(np.sqrt(R * R * nv / (np.sqrt(3) / 2)))
 
 
+def summarise_waiting_time(good):
+    """Ensemble summary of the matched-null test (v2.7).
+
+    For each p column: how many runs have p < 0.05, the binomial chance of
+    at least that many under H0, and Fisher's combined p, for all trusted
+    runs and split at R = 1.  Runs with too few annihilations are left out
+    and counted.
+    """
+    print()
+    print("  MATCHED NULL (annihilation waiting times vs inhomogeneous "
+          "Poisson, own rate):")
+    for col, name in (("p_wt_cv", "CV high (clustered)"),
+                      ("p_wt_lv", "LV high (cross-check)"),
+                      ("p_wt_cv_low", "CV low (regular)")):
+        for grp, sel in (("all   ", good),
+                         ("R > 1 ", [x for x in good
+                                     if x["R_at_decay_start"] > 1]),
+                         ("R <= 1", [x for x in good
+                                     if x["R_at_decay_start"] <= 1])):
+            ps = [x.get(col) for x in sel]
+            ps = [p for p in ps if p is not None and np.isfinite(p)]
+            if not ps:
+                continue
+            k = sum(p < 0.05 for p in ps)
+            fp, _ = fisher_combined(ps)
+            print("    %-22s %s: p<0.05 in %2d of %2d (chance P(>=%d) = %.2f)"
+                  "  Fisher p = %.3g"
+                  % (name, grp, k, len(ps), k, binom_tail(k, len(ps)), fp))
+    few = [x for x in good if x.get("wt_note")]
+    if few:
+        print("    %d run(s) excluded from the matched test: %s"
+              % (len(few), ", ".join(sorted({x["wt_note"] for x in few}))))
+    cvs = [x["wt_cv"] for x in good
+           if x.get("wt_cv") is not None and np.isfinite(x["wt_cv"])]
+    if cvs:
+        print("    mean CV = %.3f  (Poisson 1.0; per-run null mean is in the CSV)"
+              % np.mean(cvs))
+
+
 def report(archive, args):
     """Table of finished runs whose STORED params match the current settings.
 
@@ -692,7 +976,7 @@ def report(archive, args):
     hdr = ("%5s %4s %6s %7s %4s %4s %4s %4s %6s"
            % ("Ma", "seed", "nv", "R", "ev2", "ev3", "ev4", "cons", "cellsR"))
     if args.surrogates:
-        hdr += "  p_phase(3)  p_iaaft(3)"
+        hdr += "  p_phase(3)  p_iaaft(3)  pairs    CV  p_wt   p_LV"
     print(hdr)
     table = []
     for (Ma, seed), r in sorted(rows.items()):
@@ -727,6 +1011,17 @@ def report(archive, args):
                             st[m]["theta_" + th]["p"]
                 line += "  %10.3f  %10.3f" % (row["p_phase_theta3"],
                                               row["p_iaaft_theta3"])
+                # v2.7: matched null -- annihilation waiting times against
+                # an inhomogeneous Poisson process with the run's own rate
+                wt = waiting_time_test(ts, n_surr=args.surrogates, seed=seed)
+                row.update(n_pairs=wt["n_pairs"], flicker=wt.get("flicker"),
+                           wt_cv=wt["cv"], wt_B=wt["B"], wt_lv=wt["lv"],
+                           wt_cv_null=wt.get("cv_null_mean"),
+                           p_wt_cv=wt["p_cv"], p_wt_cv_low=wt["p_cv_low"],
+                           p_wt_lv=wt["p_lv"], wt_note=wt["note"])
+                line += "  %5d %5.2f %5.3f %6.3f%s" % (
+                    wt["n_pairs"], wt["cv"], wt["p_cv"], wt["p_lv"],
+                    "" if not wt["note"] else "  (" + wt["note"] + ")")
             except Exception as exc:
                 line += "  (surrogate test failed: %s)" % exc
         print(line)
@@ -763,6 +1058,7 @@ def report(archive, args):
             print("  runs with p_phase(theta=3) < 0.05: %d of %d "
                   "(about %.1f expected by chance)"
                   % (len(sig), len(good), 0.05 * len(good)))
+            summarise_waiting_time(good)
     return table
 
 
