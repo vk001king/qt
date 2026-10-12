@@ -298,5 +298,47 @@
   "value": "same=True, quick8=False, Td600=False, legacy=True",
   "criterion": "only identical params match",
   "pass": true
+ },
+ {
+  "name": "T14a pair extraction exact despite one-sample mask flicker",
+  "value": "pairs=4 at samples [np.int64(40), np.int64(41), np.int64(150), np.int64(300)], flicker=0.30",
+  "criterion": "4 pairs at [40, 41, 150, 300]",
+  "pass": true
+ },
+ {
+  "name": "T14b Grenander rate: concave majorant, ends pinned",
+  "value": "min(LCM-C)=0.00e+00, max d(slope)=1.1e-13",
+  "criterion": ">=0, <=0, ends equal",
+  "pass": true
+ },
+ {
+  "name": "T14c constant-rate null rejects pure decaying Poisson (why matching matters)",
+  "value": "20/20 p<0.05",
+  "criterion": ">= 18/20",
+  "pass": true
+ },
+ {
+  "name": "T14d matched null calibrated (60 H0 series, flicker, 2 rates)",
+  "value": "2/60 p<0.05, median p=0.59",
+  "criterion": "<= 8/60 (nominal 3; P(>=9)=0.003), median 0.35-0.65",
+  "pass": true
+ },
+ {
+  "name": "T14e matched null detects avalanches at equal mean rate",
+  "value": "20/20 p<0.05",
+  "criterion": ">= 18/20",
+  "pass": true
+ },
+ {
+  "name": "T14f flat / sparse series: 'too few events', p=nan",
+  "value": "flat: 'too few events', sparse (1 pairs): 'too few events'",
+  "criterion": "both flagged",
+  "pass": true
+ },
+ {
+  "name": "T14g --report: matched-null columns in table and CSV",
+  "value": "rows=2, p_wt_cv H0=0.75, burst=0.025",
+  "criterion": "2 rows, burst p<0.05<=H0 p",
+  "pass": true
  }
 ]
