@@ -301,7 +301,7 @@
  },
  {
   "name": "T14a pair extraction exact despite one-sample mask flicker",
-  "value": "pairs=4 at samples [np.int64(40), np.int64(41), np.int64(150), np.int64(300)], flicker=0.30",
+  "value": "pairs=4 at samples [40, 41, 150, 300], flicker=0.30",
   "criterion": "4 pairs at [40, 41, 150, 300]",
   "pass": true
  },
@@ -339,6 +339,24 @@
   "name": "T14g --report: matched-null columns in table and CSV",
   "value": "rows=2, p_wt_cv H0=0.75, burst=0.025",
   "criterion": "2 rows, burst p<0.05<=H0 p",
+  "pass": true
+ },
+ {
+  "name": "T15a persistence removes uncorrelated flicker, keeps vortices",
+  "value": "raw 100 -> kept 40/40 true + 0 spurious",
+  "criterion": ">= 38/40 true kept, <= 3 spurious",
+  "pass": true
+ },
+ {
+  "name": "T15b/c moving vortex kept; annihilated pair removed at once",
+  "value": "frame2 nv_p=3, frame3 nv_p=1",
+  "criterion": "3 then 1",
+  "pass": true
+ },
+ {
+  "name": "T15d count-version key: old runs re-run in scans, kept in report",
+  "value": "scan match=False, report match=True",
+  "criterion": "False, True",
   "pass": true
  }
 ]
