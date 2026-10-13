@@ -707,6 +707,7 @@ def t13_trackA_analysis():
     class A:
         eps_dd, l_z, n0_as3, cells, dx = 1.414, 8.6, 1.17e-4, 12, 0.5
         T_stir, T_decay, sample_every, n_stir, V0_factor = 60., 200., .5, 0, 1.5
+        count_version, persist, persist_radius = None, 3, 1.0
     want = T.point_params(A, 0.6, 0)
     quick = dict(want, track="A", cells=8, T_stir=15.0, T_decay=40.0,
                  n_stir=2)
@@ -831,6 +832,7 @@ def t14_matched_null():
         class A:
             eps_dd, l_z, n0_as3, cells, dx = 1.414, 8.6, 1.17e-4, 12, 0.5
             T_stir, T_decay, sample_every, n_stir, V0_factor = 60., 200., .5, 0, 1.5
+            count_version, persist, persist_radius = None, 3, 1.0
             surrogates = 39
 
         class Arch:
@@ -862,6 +864,70 @@ def t14_matched_null():
            f"burst={table[1].get('p_wt_cv')}", "2 rows, burst p<0.05<=H0 p", ok)
 
 
+# ---------------------------------------------------------------- T15
+def t15_persistent_count():
+    """v2.8: persistence-filtered vortex count (flicker removal) and the
+    measurement-version key."""
+    from qtsim.diagnostics import persistent_charges
+    from campaign import track_a_scan as T
+    r = np.random.default_rng(11)
+    N = 128
+    true = np.zeros((N, N), int)
+    pos = r.choice(N * N, 40, replace=False)
+    true.flat[pos[:20]] = 1
+    true.flat[pos[20:]] = -1
+
+    def noisy(base, k):
+        q = base.copy()
+        rr = np.random.default_rng(100 + k)
+        idx = rr.choice(N * N, 60, replace=False)
+        q.flat[idx] = rr.choice([-1, 1], 60)     # uncorrelated flicker
+        return q
+
+    # T15a: 40 static vortices + 60 random flicker charges per frame
+    frames = [noisy(true, k) for k in range(3)]
+    raw_n = int((frames[2] != 0).sum())
+    qp = persistent_charges(frames[2], frames[:2], radius=2)
+    kept_true = int(((qp != 0) & (true != 0)).sum())
+    extra = int(((qp != 0) & (true == 0)).sum())
+    record("T15a persistence removes uncorrelated flicker, keeps vortices",
+           f"raw {raw_n} -> kept {kept_true}/40 true + {extra} spurious",
+           ">= 38/40 true kept, <= 3 spurious", kept_true >= 38 and extra <= 3)
+
+    # T15b: a vortex moving 1 plaquette per frame is kept; T15c: a pair
+    # that annihilates leaves the count in the SAME frame
+    fr = []
+    for k in range(4):
+        q = np.zeros((N, N), int)
+        q[50 + k, 60] = 1                        # moving +1
+        if k < 3:
+            q[80, 80] = 1; q[80, 84] = -1        # pair, gone at k = 3
+        fr.append(q)
+    p2 = persistent_charges(fr[2], fr[:2], radius=2)
+    p3 = persistent_charges(fr[3], fr[1:3], radius=2)
+    ok = int((p2 != 0).sum()) == 3 and int((p3 != 0).sum()) == 1
+    record("T15b/c moving vortex kept; annihilated pair removed at once",
+           f"frame2 nv_p={int((p2 != 0).sum())}, frame3 nv_p={int((p3 != 0).sum())}",
+           "3 then 1", ok)
+
+    # T15d: v2.7 runs (count version 1) are NOT 'done' for a v2.8 scan, but
+    # --report (count_version unset) still lists them
+    class A:
+        eps_dd, l_z, n0_as3, cells, dx = 1.414, 8.6, 1.17e-4, 12, 0.5
+        T_stir, T_decay, sample_every, n_stir, V0_factor = 60., 200., .5, 0, 1.5
+        count_version, persist, persist_radius = None, 3, 1.0
+    want = T.point_params(A, 0.6, 0)
+    old = {k: v for k, v in dict(want, track="A").items()
+           if k not in T.COUNT_FIELDS}
+    ok = (not T.stored_matches(old, want)
+          and T.stored_matches(old, want, ignore=T.COUNT_FIELDS)
+          and T.stored_matches(dict(want, track="A"), want))
+    record("T15d count-version key: old runs re-run in scans, kept in report",
+           f"scan match={T.stored_matches(old, want)}, report match="
+           f"{T.stored_matches(old, want, ignore=T.COUNT_FIELDS)}",
+           "False, True", ok)
+
+
 if __name__ == "__main__":
     t_start = time.time()
     for t in (t1_plane_wave, t2_order, t3_thomas_fermi, t4_q5,
@@ -869,7 +935,7 @@ if __name__ == "__main__":
               t8_quasi2d_kernel, t9_conservation_laws,
               t10_minimizer, t11_vortex_detection_in_voids,
               t12_backend_selection, t13_trackA_analysis,
-              t14_matched_null):
+              t14_matched_null, t15_persistent_count):
         t()
     npass = sum(1 for *_, p in RESULTS if p)
     print(f"\n== {npass}/{len(RESULTS)} checks passed "
