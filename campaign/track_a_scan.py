@@ -66,7 +66,9 @@ from qtsim import (Grid, EGPESolver, gamma_tilde,
                    quasi2d_dipolar_symbol, quasi2d_dipolar_profile)
 from qtsim.diagnostics import (plaquette_charges_2d,
                                plaquette_charges_2d_masked,
-                               helmholtz_split_2d)
+                               helmholtz_split_2d, persistent_charges,
+                               droplet_centers, interstitial_charges)
+from collections import deque
 from qtsim.minimize import minimize_energy
 
 
@@ -121,6 +123,24 @@ def parse_args():
     p.add_argument("--surrogates", type=int, default=0,
                    help="with --report: number of surrogates per run for the "
                         "formal null test (0 = skip; 199 recommended)")
+    p.add_argument("--persist", type=int, default=3,
+                   help="v2.8: frames a vortex must persist in to enter the "
+                        "filtered count nv_p (current + persist-1 previous "
+                        "samples).  1 = no filter.")
+    p.add_argument("--persist_radius", type=float, default=1.0,
+                   help="v2.8: how far (xi) a vortex may move between samples "
+                        "and still count as the same one")
+    p.add_argument("--snapshots", type=int, default=0,
+                   help="v2.8: save this many CONSECUTIVE psi samples "
+                        "(complex64) at decay start, mid-decay and end, for "
+                        "offline checks of vortex detection.  0 = off. "
+                        "About 0.4 MB per frame at cells=12.")
+    p.add_argument("--count_version", type=int, default=None,
+                   help="v2.8: vortex-count version a point is keyed on "
+                        "(1 = masked count only, <= v2.7; 2 = adds the "
+                        "persistence-filtered nv_p).  Scans default to 2. "
+                        "--report ignores it unless given, and then shows "
+                        "which count each row used.")
     p.add_argument("--backend", type=str, default="cpu", choices=("cpu", "gpu"),
                    help="'cpu' (NumPy, default) or 'gpu' (CuPy).  GPU must be "
                         "requested explicitly; a request with no CuPy/GPU "
@@ -220,12 +240,51 @@ def make_stirrers(grid, mu, Ma, n_stir=1, sigma=3.0, V0_factor=1.5):
     return V_stir, V0, radius
 
 
-def sample(solver, grid, t, d, area):
-    """One diagnostic snapshot.  Masked count is primary."""
+def make_tracker(args, grid):
+    """History of earlier charge maps for the persistence filter (v2.8)."""
+    k = max(1, int(args.persist))
+    r = max(1, int(round(args.persist_radius / float(grid.dx[0]))))
+    return dict(hm=deque(maxlen=k - 1), hr=deque(maxlen=k - 1), k=k, r=r)
+
+
+def sample(solver, grid, t, d, area, tracker=None):
+    """One diagnostic snapshot.  Masked count is primary.
+
+    v2.8: with a tracker, also the persistence-filtered counts nv_p
+    (masked) and nv_p_raw (unmasked) -- see qtsim.diagnostics.
+    persistent_charges for why.  p_ready is False until the history holds
+    persist-1 frames (the first samples are filtered against fewer)."""
     q = plaquette_charges_2d(solver.psi)
     qm, mst = plaquette_charges_2d_masked(solver.psi, grid, return_stats=True)
     nv_raw = int((q != 0).sum())
     nv = int((qm != 0).sum())
+    extra = {}
+    if tracker is not None:
+        qp = persistent_charges(qm, list(tracker["hm"]), tracker["r"])
+        qpr = persistent_charges(q, list(tracker["hr"]), tracker["r"])
+        nv_p = int((qp != 0).sum())
+        # interstitial (lattice-level) winding: the robust count, v2.8
+        nden = grid.xp.abs(solver.psi) ** 2
+        cen = droplet_centers(nden, grid, d)
+        wl, _ = interstitial_charges(q, cen, grid)
+        nv_lat = int(np.abs(wl).sum())
+        L_lat = nv_lat / area
+        L_p = nv_p / area
+        extra = dict(nv_lat=nv_lat, n_droplets=int(len(cen)),
+                     n_sites=int(len(wl)),
+                     n_multi=int((np.abs(wl) > 1).sum()),
+                     L_lat=float(L_lat),
+                     R_lat=float(1.0 / np.sqrt(L_lat) / d) if L_lat > 0
+                     else float("inf"),
+                     nv_p=nv_p, nv_p_raw=int((qpr != 0).sum()),
+                     net_charge_p=int((qp == 1).sum() - (qp == -1).sum()),
+                     L_p=float(L_p),
+                     R_p=float(1.0 / np.sqrt(L_p) / d) if L_p > 0
+                     else float("inf"),
+                     p_ready=bool(len(tracker["hm"]) == tracker["k"] - 1))
+        if tracker["k"] > 1:
+            tracker["hm"].append(qm)
+            tracker["hr"].append(q)
     net = int((qm == 1).sum() - (qm == -1).sum())
     L = nv / area                      # areal vortex density
     ell = 1.0 / np.sqrt(L) if L > 0 else float("inf")
@@ -242,7 +301,7 @@ def sample(solver, grid, t, d, area):
                 E_incomp=float(Ei), E_comp=float(Ec),
                 E_total=float(solver.energy()["total"]),
                 norm=float(solver.norm()),
-                n_max=float(n.max()), n_min=float(n.min()))
+                n_max=float(n.max()), n_min=float(n.min()), **extra)
 
 
 # np.trapezoid exists only in NumPy >= 2.0; np.trapz was removed in 2.x.
@@ -667,7 +726,14 @@ def fisher_combined(ps):
 # came from an 8-cell box), and a --T_decay 600 re-run would have skipped
 # every point.  Points are now matched on all of these.
 KEY_FIELDS = ("eps_dd", "l_z", "n0_as3", "Ma", "seed", "cells", "dx",
-              "T_stir", "T_decay", "sample_every", "n_stir", "V0_factor")
+              "T_stir", "T_decay", "sample_every", "n_stir", "V0_factor",
+              "count_version", "persist", "persist_radius")
+# v2.8: the last three change the MEASUREMENT (which vortex counts are
+# recorded), not the physics.  Runs from <= v2.7 lack them and are read
+# with LEGACY values (count_version 1 = masked count only, no filter).
+LEGACY = {"sample_every": 0.5, "count_version": 1, "persist": 1,
+          "persist_radius": 0.0}
+COUNT_FIELDS = ("count_version", "persist", "persist_radius")
 
 
 def resolved_n_stir(args):
@@ -682,7 +748,11 @@ def point_params(args, Ma, seed):
                 T_stir=float(args.T_stir), T_decay=float(args.T_decay),
                 sample_every=float(args.sample_every),
                 n_stir=int(resolved_n_stir(args)),
-                V0_factor=float(args.V0_factor))
+                V0_factor=float(args.V0_factor),
+                count_version=int(args.count_version
+                                  if args.count_version is not None else 2),
+                persist=int(args.persist),
+                persist_radius=float(args.persist_radius))
 
 
 def param_key(pp):
@@ -701,7 +771,7 @@ def run_title(pp):
                pp["T_decay"], param_key(pp)))
 
 
-def stored_matches(stored, want, legacy_defaults=None):
+def stored_matches(stored, want, legacy_defaults=None, ignore=()):
     """True if a run's STORED params equal the wanted point params.
 
     Runs made before v2.6 did not store dx or sample_every.  dx is then
@@ -709,12 +779,15 @@ def stored_matches(stored, want, legacy_defaults=None):
     requested dx by rounding, so a 5 percent tolerance is used); a missing
     sample_every is taken from `legacy_defaults` (the v2.5 default 0.5).
     Any other missing field means "cannot verify" -> no match, so the point
-    is re-run rather than wrongly skipped.
+    is re-run rather than wrongly skipped.  Fields in `ignore` are not
+    compared (--report uses this to show runs of every count version).
     """
-    legacy_defaults = legacy_defaults or {"sample_every": 0.5}
+    legacy_defaults = legacy_defaults or LEGACY
     if not stored or stored.get("track") != "A":
         return False
     for k in KEY_FIELDS:
+        if k in ignore:
+            continue
         v = stored.get(k)
         if v is None and k == "dx" and stored.get("box") and stored.get("grid"):
             v = float(stored["box"][0]) / float(stored["grid"][0])
@@ -785,6 +858,13 @@ def run_point(archive, args, scales, Ma, seed):
                                        V0_factor=args.V0_factor)
     recs = []
     every = max(1, int(round(args.sample_every / dt)))
+    tracker = make_tracker(args, grid)
+    n_dec = len(range(0, int(args.T_decay / dt), every))   # decay samples
+    S = max(0, int(args.snapshots))
+    snap_idx = set()
+    if S:
+        for start in (0, n_dec // 2, n_dec - S):
+            snap_idx.update(range(max(0, start), min(n_dec, start + S)))
 
     # ---- stirring --------------------------------------------------------
     t = 0.0
@@ -793,7 +873,7 @@ def run_point(archive, args, scales, Ma, seed):
         solver.step_real(dt)
         t += dt
         if k % every == 0:
-            r = sample(solver, grid, t, d, area)
+            r = sample(solver, grid, t, d, area, tracker)
             r["phase"] = "stir"
             recs.append(r)
 
@@ -802,7 +882,7 @@ def run_point(archive, args, scales, Ma, seed):
     # so a plain host np.zeros() here raised the same TypeError on gpu.
     solver.V = grid.xp.zeros(grid.shape)
     E0, N0 = solver.energy()["total"], solver.norm()
-    r = sample(solver, grid, t, d, area)
+    r = sample(solver, grid, t, d, area, tracker)
     r["phase"] = "decay_start"
     recs.append(r)
     print("    end of stirring: nv=%d (raw %d, %.0f%% rejected) R=%.3f"
@@ -813,13 +893,20 @@ def run_point(archive, args, scales, Ma, seed):
           flush=True)
 
     # ---- free decay ------------------------------------------------------
+    i_dec = 0
     for k in range(int(args.T_decay / dt)):
         solver.step_real(dt)
         t += dt
         if k % every == 0:
-            rr = sample(solver, grid, t, d, area)
+            rr = sample(solver, grid, t, d, area, tracker)
             rr["phase"] = "decay"
             recs.append(rr)
+            if i_dec in snap_idx:
+                run.save_checkpoint(solver.psi.astype(np.complex64),
+                                    step=int(round(t / dt)), t=t,
+                                    extra=dict(tag="snapshot", i_decay=i_dec),
+                                    verbose=False)
+            i_dec += 1
 
     dE = abs(solver.energy()["total"] - E0) / abs(E0)
     dN = abs(solver.norm() - N0) / N0
@@ -830,6 +917,17 @@ def run_point(archive, args, scales, Ma, seed):
     for theta in (2.0, 3.0, 4.0):
         ev, st = detect_avalanches(decay, theta)
         av["theta_%.1f" % theta] = dict(stats=st, events=ev)
+    # v2.8: the same detector on the persistence-filtered L_p
+    decay_p = [dict(t=x["t"], L=x["L_lat"]) for x in decay if "L_lat" in x]
+    av_p = {}
+    for theta in (2.0, 3.0, 4.0):
+        ev, st = detect_avalanches(decay_p, theta)
+        av_p["theta_%.1f" % theta] = dict(stats=st, events=ev)
+
+    def upfrac(key):
+        x = np.diff([float(q[key]) for q in decay if key in q])
+        nz = x[x != 0]
+        return float(np.mean(nz > 0)) if len(nz) else 0.0
 
     Rs = [r["R"] for r in decay if np.isfinite(r["R"])]
     summary = dict(
@@ -846,10 +944,20 @@ def run_point(archive, args, scales, Ma, seed):
         energy_drift=float(dE), norm_drift=float(dN),
         conservative=conservative,
         avalanches={k: v["stats"] for k, v in av.items()},
+        avalanches_p={k: v["stats"] for k, v in av_p.items()},
+        nv_p_at_decay_start=r.get("nv_p"), R_p_at_decay_start=r.get("R_p"),
+        nv_lat_at_decay_start=r.get("nv_lat"),
+        R_lat_at_decay_start=r.get("R_lat"),
+        n_droplets_at_decay_start=r.get("n_droplets"),
+        upstep_frac_nv=upfrac("nv"), upstep_frac_nv_p=upfrac("nv_p"),
+        upstep_frac_nv_lat=upfrac("nv_lat"),
+        count_version=pp["count_version"], persist=pp["persist"],
+        persist_radius=pp["persist_radius"], snapshots=S,
         d_droplet=d, lambda_roton=lam)
 
     run.save_diagnostics(recs, name="timeseries", verbose=False)
     run.save_diagnostics(av, name="avalanches", verbose=False)
+    run.save_diagnostics(av_p, name="avalanches_p", verbose=False)
     run.save_diagnostics([summary], name="summary", verbose=False)
     run.save_checkpoint(solver.psi, step=int(t / dt), t=t, verbose=False)
     run.finish("completed" if conservative else "completed_unconservative",
@@ -860,6 +968,14 @@ def run_point(archive, args, scales, Ma, seed):
           % (summary["R_at_decay_start"],
              summary["R_decay_min"] or float("nan"),
              av["theta_3.0"]["stats"]["n_events"], dE, flag), flush=True)
+    print("    counts: nv %s -> %s (up-steps %.0f%%) | nv_lat %s -> %s "
+          "(up-steps %.0f%%, droplets %s) | events_lat(3s)=%d%s"
+          % (decay[0]["nv"], decay[-1]["nv"], 100 * summary["upstep_frac_nv"],
+             decay[0].get("nv_lat"), decay[-1].get("nv_lat"),
+             100 * summary["upstep_frac_nv_lat"], decay[0].get("n_droplets"),
+             av_p["theta_3.0"]["stats"].get("n_events", 0),
+             "  | %d snapshots saved" % len(snap_idx) if S else ""),
+          flush=True)
     return summary
 
 
@@ -954,7 +1070,8 @@ def report(archive, args):
         if Ma is None or seed is None:
             continue
         want = point_params(args, Ma, seed)
-        if not stored_matches(p, want):
+        ign = COUNT_FIELDS if args.count_version is None else ()
+        if not stored_matches(p, want, ignore=ign):
             why = ", ".join("%s=%s" % (k, p.get(k)) for k in
                             ("cells", "T_stir", "T_decay", "V0_factor")
                             if p.get(k) is not None and k in want
@@ -976,7 +1093,7 @@ def report(archive, args):
     hdr = ("%5s %4s %6s %7s %4s %4s %4s %4s %6s"
            % ("Ma", "seed", "nv", "R", "ev2", "ev3", "ev4", "cons", "cellsR"))
     if args.surrogates:
-        hdr += "  p_phase(3)  p_iaaft(3)  pairs    CV  p_wt   p_LV"
+        hdr += "  p_phase(3)  p_iaaft(3)  pairs    CV  p_wt   p_LV count"
     print(hdr)
     table = []
     for (Ma, seed), r in sorted(rows.items()):
@@ -1004,6 +1121,13 @@ def report(archive, args):
             try:
                 ts = [x for x in json.load(open(f_ts))
                       if x.get("phase") == "decay"]
+                # v2.8: use the persistence-filtered count when recorded
+                if ts and "nv_lat" in ts[0]:
+                    ts = [dict(t=x["t"], L=x["L_lat"], nv=x["nv_lat"])
+                          for x in ts]
+                    row["count"] = "nv_lat"
+                else:
+                    row["count"] = "nv"
                 st = surrogate_test(ts, n_surr=args.surrogates, seed=seed)
                 for m in ("phase", "iaaft"):
                     for th in ("2.0", "3.0", "4.0"):
@@ -1019,8 +1143,9 @@ def report(archive, args):
                            wt_cv_null=wt.get("cv_null_mean"),
                            p_wt_cv=wt["p_cv"], p_wt_cv_low=wt["p_cv_low"],
                            p_wt_lv=wt["p_lv"], wt_note=wt["note"])
-                line += "  %5d %5.2f %5.3f %6.3f%s" % (
+                line += "  %5d %5.2f %5.3f %6.3f %s%s" % (
                     wt["n_pairs"], wt["cv"], wt["p_cv"], wt["p_lv"],
+                    row["count"],
                     "" if not wt["note"] else "  (" + wt["note"] + ")")
             except Exception as exc:
                 line += "  (surrogate test failed: %s)" % exc
