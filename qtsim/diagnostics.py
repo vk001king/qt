@@ -134,6 +134,119 @@ def _annulus_kernel(grid: Grid, r_in: float, r_out: float):
     return grid.fft_mod.fftn(m_dev)
 
 
+def _dilate_sign(q, s, radius, xp):
+    """Boolean map: True within `radius` plaquettes (disc, periodic) of a
+    charge of sign s.  Rolls only, so it runs unchanged on NumPy or CuPy.
+    Cost: about pi*radius^2 rolls of a boolean array per call."""
+    src = q == s
+    out = src.copy()
+    for dx in range(-radius, radius + 1):
+        for dy in range(-radius, radius + 1):
+            if (dx or dy) and dx * dx + dy * dy <= radius * radius:
+                out |= xp.roll(xp.roll(src, dx, 0), dy, 1)
+    return out
+
+
+def persistent_charges(q, history, radius=2):
+    """Keep only charges confirmed in EVERY earlier frame of `history`.
+
+    v2.8.  A charge of sign s at plaquette p survives if each frame in
+    `history` (charge maps from the previous samples, same grid) holds a
+    charge of the same sign within `radius` plaquettes of p (periodic).
+    Pass radius so that it exceeds the distance a real vortex moves
+    between samples (vortex speed < c ~ 1.4 xi/tau, so < 0.7 xi per 0.5
+    tau; radius = 1 xi is the default in track_a_scan).
+
+    WHY.  On the Track A data the masked count went UP in 47-53 percent of
+    its nonzero sample-to-sample steps and jumped by 6+ vortices in 25-40
+    percent of samples, with a dominant period of 1.1-2.4 tau.  True vortex
+    number cannot rise in free decay, so most of that is detection flicker
+    (candidates at the droplet/void interface moving in and out of the
+    annulus mask as droplets breathe).  Flicker that is uncorrelated from
+    one sample to the next is removed by requiring persistence; a real
+    vortex, which moves continuously, is kept.  An annihilating pair
+    disappears from the persistent count at the first sample in which it
+    is gone, so annihilation timing is not delayed (only the APPEARANCE
+    of a vortex is delayed by len(history) samples).
+
+    Returns the filtered charge map (same dtype as q).
+    """
+    xp, _ = _xp_of(q)
+    keep = q != 0
+    for h in history:
+        for s in (1, -1):
+            keep &= ~((q == s) & ~_dilate_sign(h, s, radius, xp))
+    return xp.where(keep, q, 0)
+
+
+def droplet_centers(n, grid: Grid, d: float, smooth: float = 1.5):
+    """Droplet positions (physical coords from the box corner, host NumPy).
+
+    Density is Gaussian-smoothed (sigma `smooth` xi, periodic, via FFT),
+    then local maxima over a window of ~0.6 d that exceed the mean density
+    are kept.  Runs on the host: one 2D array transfer per call.
+    """
+    from scipy.ndimage import maximum_filter
+    from .backend import asnumpy
+    nh = asnumpy(n).astype(float)
+    k = [np.fft.fftfreq(s, dd) * 2 * np.pi for s, dd in zip(nh.shape, grid.dx)]
+    K2 = k[0][:, None] ** 2 + k[1][None, :] ** 2
+    ns = np.fft.ifft2(np.fft.fft2(nh) * np.exp(-0.5 * K2 * smooth ** 2)).real
+    w = [max(3, int(round(0.6 * d / dd)) | 1) for dd in grid.dx]
+    peak = (ns == maximum_filter(ns, size=w, mode="wrap")) & (ns > ns.mean())
+    idx = np.argwhere(peak)
+    return idx * np.array(grid.dx, dtype=float)
+
+
+def interstitial_charges(q, centers, grid: Grid):
+    """Net winding around every interstitial triangle of droplets.
+
+    v2.8.  The plaquette charges are summed over the Voronoi cell of each
+    interstitial site (the centroid of a Delaunay triangle of droplets).
+    For a triangular droplet lattice those Voronoi cells ARE the droplet
+    triangles, so by Stokes the sum is the phase winding around a loop
+    through three droplets, where the density is high and the phase is
+    well defined.  Defects that flicker in and out inside a void come in
+    +/- pairs and cancel; only a winding that encloses the void counts.
+
+    WHY.  Track A snapshots showed masked plaquette 'vortices' jumping a
+    median 2-7 xi between samples 0.5 tau apart (impossible for a vortex:
+    c ~ 1.4 xi/tau), with core density 0.01-0.05 of the mean -- the core
+    sits in a near-vacuum interstitial and its plaquette position is not
+    defined.  The interstitial winding is (Alana et al. also place
+    vortices at interstitial sites).
+
+    Returns (w, sites): integer winding per site and site coordinates.
+    Periodic: droplets are tiled into the 8 neighbouring images before the
+    triangulation, and only triangles whose centroid lies in the box kept.
+    """
+    from scipy.spatial import Delaunay, cKDTree
+    from .backend import asnumpy
+    L = np.array(grid.lengths, dtype=float)
+    if len(centers) < 3:
+        return np.zeros(0, int), np.zeros((0, 2))
+    tiles = np.concatenate([centers + L * np.array([a, b])
+                            for a in (-1, 0, 1) for b in (-1, 0, 1)])
+    tri = Delaunay(tiles)
+    cen = tiles[tri.simplices].mean(axis=1)
+    inside = np.all((cen >= 0) & (cen < L), axis=1)
+    sites = cen[inside]
+    qh = asnumpy(q)
+    nz = np.argwhere(qh != 0)
+    if len(nz) == 0 or len(sites) == 0:
+        return np.zeros(len(sites), int), sites
+    pos = np.mod((nz + 0.5) * np.array(grid.dx, dtype=float), L)
+    # exact: the triangle that CONTAINS each charge, mapped to its periodic
+    # image whose centroid is in the box (a distorted lattice is handled)
+    s = tri.find_simplex(pos)
+    ok = s >= 0
+    c = np.mod(cen[s[ok]], L)
+    _, j = cKDTree(sites, boxsize=L).query(c)
+    nz = nz[ok]
+    w = np.bincount(j, weights=qh[nz[:, 0], nz[:, 1]], minlength=len(sites))
+    return np.rint(w).astype(int), sites
+
+
 def plaquette_charges_2d_masked(psi, grid: Grid, r_in: float = 0.5,
                                 r_out: float = 2.0, frac: float = 0.3,
                                 return_stats: bool = False):
