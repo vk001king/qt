@@ -927,6 +927,25 @@ def t15_persistent_count():
            f"{T.stored_matches(old, want, ignore=T.COUNT_FIELDS)}",
            "False, True", ok)
 
+    # T15e (v2.9): link coherence = 1 for a phase-locked droplet lattice,
+    # ~0 for random droplet phases; measured spacing inverts the count
+    from qtsim import Grid
+    from qtsim.diagnostics import link_coherence, measured_spacing
+    g = Grid((96, 84), (60.0, 60.0 * np.sqrt(3) / 2 * 84 / 84))
+    a0 = 10.0
+    cen = np.array([[(i + 0.5 * (j % 2)) * a0, j * a0 * np.sqrt(3) / 2]
+                    for i in range(6) for j in range(6)]) % np.array(g.lengths)
+    psi_c = np.ones(g.shape, complex)
+    rr = np.random.default_rng(5)
+    psi_r = np.exp(1j * rr.uniform(-np.pi, np.pi, g.shape))
+    c1 = link_coherence(psi_c, cen, g)["cos"]
+    c2 = link_coherence(psi_r, cen, g)["cos"]
+    area = float(np.prod(g.lengths))
+    ok = abs(c1 - 1) < 1e-12 and abs(c2) < 0.25 and \
+        abs(measured_spacing(36, area) - np.sqrt(2 * area / (np.sqrt(3) * 36))) < 1e-12
+    record("T15e link coherence: locked = 1, random ~ 0",
+           f"locked {c1:.3f}, random {c2:.3f}", "1 and |x| < 0.25", ok)
+
 
 if __name__ == "__main__":
     t_start = time.time()
