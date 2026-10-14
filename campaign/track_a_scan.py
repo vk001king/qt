@@ -67,7 +67,8 @@ from qtsim import (Grid, EGPESolver, gamma_tilde,
 from qtsim.diagnostics import (plaquette_charges_2d,
                                plaquette_charges_2d_masked,
                                helmholtz_split_2d, persistent_charges,
-                               droplet_centers, interstitial_charges)
+                               droplet_centers, interstitial_charges,
+                               link_coherence, measured_spacing)
 from collections import deque
 from qtsim.minimize import minimize_energy
 
@@ -137,8 +138,10 @@ def parse_args():
                         "About 0.4 MB per frame at cells=12.")
     p.add_argument("--count_version", type=int, default=None,
                    help="v2.8: vortex-count version a point is keyed on "
-                        "(1 = masked count only, <= v2.7; 2 = adds the "
-                        "persistence-filtered nv_p).  Scans default to 2. "
+                        "(1 = masked count only, <= v2.7; 2 = adds nv_p and "
+                        "nv_lat, v2.8; 3 = adds link coherence, measured "
+                        "spacing and windowed values, v2.9).  Scans default "
+                        "to 3. "
                         "--report ignores it unless given, and then shows "
                         "which count each row used.")
     p.add_argument("--backend", type=str, default="cpu", choices=("cpu", "gpu"),
@@ -269,6 +272,8 @@ def sample(solver, grid, t, d, area, tracker=None):
         wl, _ = interstitial_charges(q, cen, grid)
         nv_lat = int(np.abs(wl).sum())
         L_lat = nv_lat / area
+        lc = link_coherence(solver.psi, cen, grid)          # v2.9
+        d_m = measured_spacing(len(cen), area)
         L_p = nv_p / area
         extra = dict(nv_lat=nv_lat, n_droplets=int(len(cen)),
                      n_sites=int(len(wl)),
@@ -276,6 +281,11 @@ def sample(solver, grid, t, d, area, tracker=None):
                      L_lat=float(L_lat),
                      R_lat=float(1.0 / np.sqrt(L_lat) / d) if L_lat > 0
                      else float("inf"),
+                     d_meas=d_m,
+                     R_lat_m=float(1.0 / np.sqrt(L_lat) / d_m) if L_lat > 0
+                     else float("inf"),
+                     coh_cos=lc["cos"], coh_frac_gt=lc["frac_gt_half_pi"],
+                     coh_median=lc["median_abs"],
                      nv_p=nv_p, nv_p_raw=int((qpr != 0).sum()),
                      net_charge_p=int((qp == 1).sum() - (qp == -1).sum()),
                      L_p=float(L_p),
@@ -750,7 +760,7 @@ def point_params(args, Ma, seed):
                 n_stir=int(resolved_n_stir(args)),
                 V0_factor=float(args.V0_factor),
                 count_version=int(args.count_version
-                                  if args.count_version is not None else 2),
+                                  if args.count_version is not None else 3),
                 persist=int(args.persist),
                 persist_radius=float(args.persist_radius))
 
@@ -924,6 +934,25 @@ def run_point(archive, args, scales, Ma, seed):
         ev, st = detect_avalanches(decay_p, theta)
         av_p["theta_%.1f" % theta] = dict(stats=st, events=ev)
 
+    def window(key, first, span=5.0):
+        """Mean of `key` over the first / last `span` tau of the decay."""
+        xs = [(q["t"], q[key]) for q in decay if key in q
+              and q[key] is not None and np.isfinite(q[key])]
+        if not xs:
+            return None
+        t0, t1 = xs[0][0], xs[-1][0]
+        sel = [v for tt, v in xs
+               if (tt <= t0 + span if first else tt >= t1 - span)]
+        return float(np.mean(sel)) if sel else None
+
+    def slip_rate():
+        """Mean |change| of nv_lat per tau between samples -- the rate of
+        winding changes (phase slips), not of net decay."""
+        x = np.array([float(q["nv_lat"]) for q in decay if "nv_lat" in q])
+        if len(x) < 2:
+            return None
+        return float(np.mean(np.abs(np.diff(x))) / args.sample_every)
+
     def upfrac(key):
         x = np.diff([float(q[key]) for q in decay if key in q])
         nz = x[x != 0]
@@ -951,6 +980,13 @@ def run_point(archive, args, scales, Ma, seed):
         n_droplets_at_decay_start=r.get("n_droplets"),
         upstep_frac_nv=upfrac("nv"), upstep_frac_nv_p=upfrac("nv_p"),
         upstep_frac_nv_lat=upfrac("nv_lat"),
+        nv_lat_first5=window("nv_lat", True), nv_lat_last5=window("nv_lat", False),
+        R_lat_m_first5=window("R_lat_m", True),
+        R_lat_m_last5=window("R_lat_m", False),
+        d_meas_first5=window("d_meas", True),
+        coh_cos_first5=window("coh_cos", True),
+        coh_cos_last5=window("coh_cos", False),
+        slip_rate=slip_rate(),
         count_version=pp["count_version"], persist=pp["persist"],
         persist_radius=pp["persist_radius"], snapshots=S,
         d_droplet=d, lambda_roton=lam)
@@ -976,6 +1012,15 @@ def run_point(archive, args, scales, Ma, seed):
              av_p["theta_3.0"]["stats"].get("n_events", 0),
              "  | %d snapshots saved" % len(snap_idx) if S else ""),
           flush=True)
+    f = lambda v, fmt: (fmt % v) if v is not None else "n/a"
+    print("    lattice: nv_lat(5tau avg) %s -> %s | R_lat_m %s -> %s "
+          "(d_meas %s xi vs roton d %.2f) | coherence <cos dphi> %s -> %s "
+          "| slip rate %s /tau"
+          % (f(summary["nv_lat_first5"], "%.1f"), f(summary["nv_lat_last5"], "%.1f"),
+             f(summary["R_lat_m_first5"], "%.3f"), f(summary["R_lat_m_last5"], "%.3f"),
+             f(summary["d_meas_first5"], "%.2f"), d,
+             f(summary["coh_cos_first5"], "%.3f"), f(summary["coh_cos_last5"], "%.3f"),
+             f(summary["slip_rate"], "%.1f")), flush=True)
     return summary
 
 
