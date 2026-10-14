@@ -247,6 +247,54 @@ def interstitial_charges(q, centers, grid: Grid):
     return np.rint(w).astype(int), sites
 
 
+def link_coherence(psi, centers, grid: Grid):
+    """Phase coherence across nearest-neighbour droplet links (v2.9).
+
+    Links are the edges of the periodic Delaunay triangulation of the
+    droplet centres; the phase of each droplet is read at its centre
+    (where the density, and so the phase, is best defined).  Returns
+    dict(cos=<cos dphi>  [1 = phase-locked crystal, 0 = random phases],
+         frac_gt_half_pi = fraction of links with |dphi| > pi/2,
+         median_abs = median |dphi| in rad, n_links).
+    A ground state gives cos = 1 exactly.  After stirring, the Track A
+    snapshots gave median |dphi| ~ 1.1-1.3 rad, i.e. weak links that
+    support frequent phase slips (the cause of nv_lat fluctuating).
+    """
+    from scipy.spatial import Delaunay
+    from .backend import asnumpy
+    L = np.array(grid.lengths, dtype=float)
+    nan = float("nan")
+    if len(centers) < 3:
+        return dict(cos=nan, frac_gt_half_pi=nan, median_abs=nan, n_links=0)
+    ph_all = np.angle(asnumpy(psi))
+    idx = np.rint(centers / np.array(grid.dx, dtype=float)).astype(int) \
+        % np.array(grid.shape)
+    ph = ph_all[idx[:, 0], idx[:, 1]]
+    n0 = len(centers)
+    tiles = np.concatenate([centers + L * np.array([a, b])
+                            for a in (-1, 0, 1) for b in (-1, 0, 1)])
+    tri = Delaunay(tiles)
+    s = tri.simplices
+    e = np.concatenate([s[:, [0, 1]], s[:, [1, 2]], s[:, [2, 0]]]) % n0
+    e = np.unique(np.sort(e, axis=1), axis=0)
+    e = e[e[:, 0] != e[:, 1]]
+    dphi = np.angle(np.exp(1j * (ph[e[:, 0]] - ph[e[:, 1]])))
+    a = np.abs(dphi)
+    return dict(cos=float(np.mean(np.cos(dphi))),
+                frac_gt_half_pi=float(np.mean(a > np.pi / 2)),
+                median_abs=float(np.median(a)), n_links=int(len(e)))
+
+
+def measured_spacing(n_droplets, area):
+    """Triangular-lattice spacing implied by the droplet count (v2.9):
+    area per droplet = (sqrt 3 / 2) a^2.  The roton estimate d assumed by
+    the commensurate box was 10.3 xi; a no-stir 5-cell crystal measured
+    9.2 xi nearest-neighbour spacing with 28 droplets instead of 25."""
+    if not n_droplets:
+        return float("nan")
+    return float(np.sqrt(2.0 * area / (np.sqrt(3.0) * n_droplets)))
+
+
 def plaquette_charges_2d_masked(psi, grid: Grid, r_in: float = 0.5,
                                 r_out: float = 2.0, frac: float = 0.3,
                                 return_stats: bool = False):
