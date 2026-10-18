@@ -358,5 +358,11 @@
   "value": "scan match=False, report match=True",
   "criterion": "False, True",
   "pass": true
+ },
+ {
+  "name": "T15e link coherence: locked = 1, random ~ 0",
+  "value": "locked 1.000, random 0.061",
+  "criterion": "1 and |x| < 0.25",
+  "pass": true
  }
 ]
