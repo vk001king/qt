@@ -1,5 +1,19 @@
 # Open items
 
+## Fixed in v2.12 (model error, found in peer review)
+- [x] `quasi2d_dipolar_profile` used one axial form factor exp(-kz^2 lz^2/4)
+      instead of the product of two, exp(-kz^2 lz^2/2); the symbol was
+      sqrt(2) D(k; lz/sqrt(2)), limits 2*sqrt(2) and -sqrt(2). Corrected to
+      D(k) = 2 - 3 sqrt(pi/2) q erfcx(q/sqrt(2)), q = k lz (limits 2, -1).
+      New test T8g compares with a brute-force 3D grid energy (3.4e-7).
+- [x] Quasi-2D LHY coefficient now carries the projection factor 2/sqrt(5)
+      relative to the peak density (`LHY_Q2D_FACTOR`), and l_z/xi, gamma,
+      xi, tau come from one routine, `q2d_parameters()` (T16b).
+- [!] Consequence: at eps_dd = 1.414 (old default of track_a_scan.py) the
+      uniform state is roton-stable; the frozen-Gaussian quasi-2D model has a
+      triangular supersolid only for eps_dd >= 2.10. track_a_scan.py
+      defaults now report "no roton".
+
 ## Fixed in v1.1
 - [x] Temporal-aliasing blow-up: solver now rejects dt with
       k_max^2*dt > 2 rad/step (T7 regression tests).

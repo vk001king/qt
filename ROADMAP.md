@@ -1,5 +1,11 @@
 # Roadmap to publication
 
+> **v2.12 update.** The quasi-2D kernel was corrected (see FLAGS.md) and the
+> production campaign was redone at eps_dd = 2.10 with the scripts in
+> `campaign/` (imprint, stirring, energy-matched controls, convergence).
+> Next step: a 3D eGPE calculation in the experimental parameter window
+> (Step 5), since the frozen-Gaussian model has no supersolid there.
+
 Current position (v2.6): **Track A 12-cell scan complete (24/24 clean
 points) with the surrogate null test; crossover gap (R 0.8-1.3) and long
 decay still to run.**  Earlier: **Step 1 complete** — solver built, now

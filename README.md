@@ -4,9 +4,10 @@
 
 A validated pseudo-spectral solver for the **extended Gross–Pitaevskii equation** (eGPE) with dipolar interactions and Lee–Huang–Yang corrections, built to study vortex-tangle quantum turbulence in dipolar supersolids.
 
-**Status:** v2.6. 50/50 validation checks passing. All 8 core notebook cells
-verified by execution at **full length** (no shortened loops); a 9th, optional
-cell verifies the GPU backend and is skipped automatically when no GPU is present.
+**Status:** v2.12. 64/64 validation checks passing. **v2.12 corrects the
+quasi-2D dipolar projection used by all earlier versions** (see the v2.12
+section below); quasi-2D results produced with v2.11 or earlier are
+superseded.
 
 Version history is summarised below, newest first; the *Bug history* section
 records the v1.0 → v1.1 temporal-aliasing fix in full.
@@ -247,6 +248,59 @@ mode rather than a true minimum, and should resolve once the quasi-2D
 projected kernel gives a physical modulation wavelength (rung V4).
 
 Higher validation rungs (comparison against published ¹⁶⁴Dy results, glitch dynamics, turbulence regression) are listed in `ROADMAP.md` as the next work item.
+
+---
+
+## v2.12: corrected quasi-2D projection, and the melting campaign
+
+**Bug fix (affects every quasi-2D result before v2.12).** The projected
+dipolar kernel `quasi2d_dipolar_profile` used a single axial form factor,
+`exp(-kz^2 lz^2/4)`, where the interaction energy requires the product of
+two, `exp(-kz^2 lz^2/2)`. The old symbol equals `sqrt(2) * D(k; lz/sqrt(2))`,
+with limits `2*sqrt(2)` and `-sqrt(2)` instead of `2` and `-1`, and it
+overstated the dipolar interaction. The corrected symbol is
+
+    D(k) = 2 - 3 sqrt(pi/2) (k lz) erfcx(k lz / sqrt(2))
+
+(Ticknor, PRA 85, 033629 (2012)). A new brute-force test (T8g) checks it
+against the energy of a 3D Gaussian-profile density computed on a 3D grid
+(agreement 3.4e-7). The previous suite compared the closed form with a
+quadrature of the *same* single-form-factor integral, which is why it did
+not catch the error.
+
+Consequences:
+* At the old production point (`eps_dd = 1.414`, i.e. a_s ~ 92.5 a0) the
+  uniform state is roton-**stable**; there is no supersolid.
+  `track_a_scan.py` with its old defaults therefore reports "no roton".
+* In the frozen-Gaussian quasi-2D model a triangular supersolid appears
+  only for `eps_dd >= 2.10` (a_s ~ 62 a0 at omega_z = 2 pi x 103 Hz,
+  n_peak = 2e21 m^-3). The v2.12 campaign works there, as a model study.
+
+**Other additions**
+* `qtsim/lhy.py`: `LHY_Q2D_FACTOR = 2/sqrt(5)` and `q2d_parameters()`, which
+  derives `l_z/xi`, `gamma`, `xi`, `tau` and `a_s` consistently from
+  `(eps_dd, omega_z, n_peak)` (T16b).
+* `qtsim/imprint.py`: exact vortex imprinting on a torus with Jacobi theta
+  functions (T16a).
+* `campaign/`: `regime_scan.py`, `spacing_scan.py` (variational lattice
+  constant), `build_ground.py` (production ground state), `validate_count.py`
+  (interstitial count on controlled configurations), `stability_check.py`,
+  `decay_run.py` (imprint / stir / energy-matched vortex-free control),
+  `analyse.py` (melting time, decay laws with autocorrelation-corrected AIC
+  and block bootstrap), `vortex_structure.py` (pairing statistics).
+  Default paths point to `/home/claude/runs2`; pass `--ground` / `--outdir`
+  to use other locations.
+* Validation suite: 64/64.
+
+**Main physics result of the campaign.** The vortex-free crystal is stable,
+but injecting 10 or more vortices melts it (bond order falls to near that of
+random points; droplets survive), with melting time
+`t_m ~ 1.5 tau + 1.75 tau * N_d/N_v`. Energy-matched vortex-free phase
+disturbances (`decay_run.py --protocol phase --match_Nv N`) melt it as well,
+1.2-2x faster, and at the lowest energy without any vortex appearing: the
+melting is driven by the injected energy. Inter-droplet phase coherence, in
+contrast, is destroyed by the vortices themselves. See the accompanying
+manuscript for the decay-law analysis.
 
 ---
 

@@ -5,6 +5,7 @@ Package layout:
     lhy.py          Lee-Huang-Yang Q5 integral, dimensionless gamma
     solver.py       EGPESolver: split-step real/imaginary time, energy
     diagnostics.py  vortex detection, circulation, Helmholtz decomposition
+    imprint.py      exact periodic vortex imprinting (Jacobi theta functions)
     drive_io.py     Archive: structured timestamped output folders
 
 Quick start:
@@ -36,7 +37,7 @@ from .drive_io import (Archive, Run, ensure_dir, mount_drive,
 from . import diagnostics
 from . import minimize
 
-__version__ = "2.11.0"
+__version__ = "2.12.0"
 
 __all__ = [
     "Grid",

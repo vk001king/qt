@@ -137,25 +137,29 @@ def truncated_dipolar_symbol(grid: Grid, ehat, R: float) -> np.ndarray:
 # Factorize psi(r,z) = psi_2D(r) phi(z) with a normalized Gaussian
 #     phi(z) = (pi l_z^2)^{-1/4} exp(-z^2 / 2 l_z^2),
 # whose density |phi|^2 has Fourier transform exp(-k_z^2 l_z^2 / 4).
-# Projecting out z:
-#     U_2D(k) = int dk_z/(2pi) U3(k, k_z) exp(-k_z^2 l_z^2 / 4)
-#             = g_dd [ 2/(sqrt(pi) l_z)
-#                      - (3k/2) exp(k^2 l_z^2/4) erfc(k l_z/2) ],
-# using   int dk_z exp(-a k_z^2)/(k_z^2+k^2) = (pi/k) e^{a k^2} erfc(sqrt(a) k).
-# The contact coupling projects to  g_2D = g / (sqrt(2 pi) l_z)  because
-# int |phi|^4 dz = 1/(sqrt(2 pi) l_z).  Dividing:
+# Projecting out z.  The dipolar energy (1/2) int n U n couples the axial
+# profile of BOTH densities, so in Fourier space it carries the PRODUCT of
+# two axial form factors, |F(k_z)|^2 = exp(-k_z^2 l_z^2 / 2):
+#     U_2D(k) = int dk_z/(2pi) U3(k, k_z) exp(-k_z^2 l_z^2 / 2)
+#             = g_dd [ 2/(sqrt(2 pi) l_z)
+#                      - (3k/2) exp(k^2 l_z^2/2) erfc(k l_z/sqrt2) ],
+# using   int dk_z exp(-a k_z^2)/(k_z^2+k^2) = (pi/k) e^{a k^2} erfc(sqrt(a) k)
+# with a = l_z^2/2.  The contact coupling projects to g_2D = g/(sqrt(2 pi) l_z)
+# because int |phi|^4 dz = 1/(sqrt(2 pi) l_z).  Dividing:
 #
 #     U_2D(k) / g_2D = eps_dd * D(k),
-#     D(k) = 2 sqrt(2) - 3 sqrt(2 pi) u erfcx(u),      u = k l_z / 2,
+#     D(k) = 2 - 3 sqrt(pi/2) q erfcx(q/sqrt2),      q = k l_z,
 #
-# with erfcx(u) = exp(u^2) erfc(u) evaluated in scaled form for stability.
+# the standard quasi-2D result for dipoles perpendicular to the plane.
 #
-# LIMITS (both verified numerically to 1e-15 against direct quadrature):
-#     D(0)      = +2 sqrt(2) = +2.828   repulsive at long wavelength
-#     D(k->inf) = -  sqrt(2) = -1.414   ATTRACTIVE at short wavelength
-# That sign change is the origin of the roton minimum, and it is exactly
-# what the bare periodic kernel lacks -- which is why the bare kernel
-# produced only a box-scale mode rather than a droplet crystal.
+# LIMITS:  D(0) = +2 (repulsive),  D(k->inf) = -1 (attractive).
+#
+# v2.12 BUG FIX.  Versions <= v2.11 used a SINGLE form factor
+# exp(-k_z^2 l_z^2/4).  That kernel equals sqrt(2) * D_correct(k; l_z/sqrt2),
+# i.e. it overstated the dipolar strength by sqrt(2) at a width l_z/sqrt(2),
+# with limits 2 sqrt2 and -sqrt2.  The old test (T8a) checked the closed form
+# against quadrature of the SAME single-factor integral and so could not catch
+# it; T8g now checks against a brute-force 3D calculation instead.
 # ---------------------------------------------------------------------------
 
 def _erfcx(x):
@@ -186,8 +190,8 @@ def quasi2d_dipolar_profile(k, l_z: float) -> np.ndarray:
     k    : in-plane wavenumber magnitude (units of xi)
     l_z  : Gaussian axial confinement length (units of xi)
     """
-    u = 0.5 * np.asarray(k, dtype=float) * float(l_z)
-    return 2.0 * np.sqrt(2.0) - 3.0 * np.sqrt(2.0 * np.pi) * u * _erfcx(u)
+    q = np.asarray(k, dtype=float) * float(l_z)
+    return 2.0 - 3.0 * np.sqrt(np.pi / 2.0) * q * _erfcx(q / np.sqrt(2.0))
 
 
 def quasi2d_dipolar_symbol(grid: Grid, l_z: float) -> np.ndarray:

@@ -272,10 +272,13 @@ def t7_long_time_stability():
 def t8_quasi2d_kernel():
     """Quasi-2D projected dipolar kernel: derivation, limits, roton.
 
-    The kernel is
-        D(k) = 2 sqrt(2) - 3 sqrt(2 pi) u erfcx(u),   u = k l_z / 2,
+    The kernel (v2.12, corrected) is
+        D(k) = 2 - 3 sqrt(pi/2) q erfcx(q/sqrt2),   q = k l_z,
     obtained by integrating the 3D symbol g_dd(3 k_z^2/k^2 - 1) against the
-    Gaussian axial density and dividing by g_2D = g/(sqrt(2 pi) l_z).
+    PRODUCT of the two axial density form factors, exp(-k_z^2 l_z^2/2), and
+    dividing by g_2D = g/(sqrt(2 pi) l_z).  T8g checks it against a
+    brute-force 3D calculation, which the pre-v2.12 single-factor kernel
+    fails.
     Unlike the bare periodic symbol it changes sign, which is what creates
     a roton and therefore a droplet crystal at a physical wavelength.
     """
@@ -292,7 +295,7 @@ def t8_quasi2d_kernel():
             def integ(kz, kv=kv):
                 k2 = kv * kv + kz * kz
                 return ((3 * kz * kz / k2 - 1.0)
-                        * np.exp(-kz * kz * lz * lz / 4.0) / (2 * np.pi))
+                        * np.exp(-kz * kz * lz * lz / 2.0) / (2 * np.pi))
             num, _ = quad(integ, -60 / lz, 60 / lz, limit=400)
             num *= np.sqrt(2 * np.pi) * lz
             ana = float(quasi2d_dipolar_profile(kv, lz))
@@ -306,15 +309,14 @@ def t8_quasi2d_kernel():
     # (b) both limits, exactly
     d0 = float(quasi2d_dipolar_profile(1e-9, 1.0))
     dinf = float(quasi2d_dipolar_profile(1e4, 1.0))
-    ok = (abs(d0 - 2 * np.sqrt(2)) < 1e-6
-          and abs(dinf + np.sqrt(2)) < 1e-6)
-    record("T8b limits D(0)=2sqrt2, D(inf)=-sqrt2",
-           f"{d0:.6f} / {dinf:.6f}", "2.828427 / -1.414214", ok)
+    ok = (abs(d0 - 2.0) < 1e-6 and abs(dinf + 1.0) < 1e-3)
+    record("T8b limits D(0)=2, D(inf)=-1",
+           f"{d0:.6f} / {dinf:.6f}", "2.000000 / -1.000000", ok)
 
     # (c) overflow safety far beyond the erfc overflow threshold
     big = float(quasi2d_dipolar_profile(1e6, 1.0))
     record("T8c overflow-safe at k=1e6", f"{big:.6f}",
-           "finite, approx -sqrt2", np.isfinite(big) and abs(big + 1.4142) < 1e-3)
+           "finite, approx -1", np.isfinite(big) and abs(big + 1.0) < 1e-3)
 
     # (d) sign change exists (this is what the bare kernel lacks)
     kk = np.linspace(1e-6, 20, 4000)
@@ -324,13 +326,15 @@ def t8_quasi2d_kernel():
            D.max() > 0 and D.min() < 0)
 
     # (e) roton instability appears where linear theory says it should
-    eps, lz2 = 1.8, 6.0
-    gam = gamma_tilde(eps, 5e-5)
+    from qtsim.lhy import q2d_parameters
+    pp = q2d_parameters(2.10, 103.0, 2e21)
+    eps, lz2 = 2.10, pp["l_z"]
+    gam = pp["gamma"]
     Dp = quasi2d_dipolar_profile(kk, lz2)
     inside = kk ** 2 + 2.0 * (1.0 + eps * Dp) + 3.0 * gam
     imin = int(np.argmin(inside))
     a_pred = 2 * np.pi / kk[imin]
-    record("T8e roton instability at eps_dd=1.8, l_z=6",
+    record("T8e roton instability at eps_dd=2.10 (v2.12 production point)",
            f"min_inside={inside[imin]:.4f}, a_pred={a_pred:.3f} xi",
            "min_inside < 0 (unstable)", inside[imin] < 0)
 
@@ -347,6 +351,63 @@ def t8_quasi2d_kernel():
            f"maxdiff={np.abs(S - P).max():.1e}, rejected3d={rejected3d}",
            "match and 3D rejected",
            np.abs(S - P).max() < 1e-14 and rejected3d)
+
+
+def t8g_bruteforce_3d_kernel():
+    """T8g (v2.12): projected kernel against a brute-force 3D calculation.
+
+    The dipolar energy of n(x,z) = (1 + delta cos kx)|phi(z)|^2 is computed on
+    a 3D (x, z) periodic grid with the full symbol 3 q_z^2/q^2 - 1, and the
+    modulated part is converted to U_2D(k)/g_2D.  This is independent of the
+    closed form and of any 1D quadrature, and it is the test that the
+    pre-v2.12 single-form-factor kernel fails by up to 0.6 in D(k).
+    """
+    from qtsim.kernels import quasi2d_dipolar_profile
+    l, delta = 1.0, 0.1
+    worst = 0.0
+    for k in (0.7, 1.0, 2.0, 4.0):
+        Lx, Nx, Lz, Nz = 2 * np.pi / k, 64, 24.0, 1024
+        x = np.arange(Nx) * Lx / Nx
+        z = (np.arange(Nz) - Nz // 2) * Lz / Nz
+        X, Z = np.meshgrid(x, z, indexing="ij")
+        n = (1 + delta * np.cos(k * X)) * np.exp(-Z ** 2 / l ** 2) / (np.sqrt(np.pi) * l)
+        nq = np.fft.fft2(n) * (Lx / Nx) * (Lz / Nz)
+        QX, QZ = np.meshgrid(2 * np.pi * np.fft.fftfreq(Nx, Lx / Nx),
+                             2 * np.pi * np.fft.fftfreq(Nz, Lz / Nz), indexing="ij")
+        q2 = QX ** 2 + QZ ** 2
+        with np.errstate(invalid="ignore", divide="ignore"):
+            U = np.where(q2 > 0, 3 * QZ ** 2 / q2 - 1, 0.0)
+        sel = np.isclose(np.abs(QX), k)
+        Emod = 0.5 * np.sum(np.abs(nq[sel]) ** 2 * U[sel]) / (Lx * Lz)
+        D_bf = Emod / ((delta ** 2 / 4) * Lx) * np.sqrt(2 * np.pi) * l
+        worst = max(worst, abs(D_bf - float(quasi2d_dipolar_profile(k, l))))
+    record("T8g projected kernel vs brute-force 3D", f"max |dD|={worst:.1e}",
+           "< 1e-4", worst < 1e-4)
+
+
+def t16_v212_imprint_and_units():
+    """T16 (v2.12): exact vortex imprinting on a torus and consistent units."""
+    from qtsim.imprint import imprint
+    from qtsim.diagnostics import plaquette_charges_2d
+    from qtsim.lhy import q2d_parameters, gamma_tilde, LHY_Q2D_FACTOR
+    g = Grid((128, 112), (64.0, 56.0))
+    rng = np.random.default_rng(5)
+    xs, ys = rng.uniform(0, 64, 30), rng.uniform(0, 56, 30)
+    qs = np.array([1] * 15 + [-1] * 15)
+    psi = imprint(np.ones(g.shape, complex), g, xs, ys, qs)
+    q = plaquette_charges_2d(psi)
+    record("T16a imprint: 30 known vortices, periodic, neutral",
+           f"+{int((q == 1).sum())}/-{int((q == -1).sum())}", "+15/-15",
+           (q == 1).sum() == 15 and (q == -1).sum() == 15)
+    p = q2d_parameters(2.10, 103.0, 2e21)
+    hbar, m = 1.054571817e-34, 163.929175 * 1.66053906660e-27
+    a_s = 130.8 * 5.29177210903e-11 / 2.10
+    gc = 4 * np.pi * hbar ** 2 * a_s / m
+    lx = np.sqrt(np.sqrt(2.0) * gc * 2e21 / (hbar * 2 * np.pi * 103.0))   # closed form
+    g_lhy = LHY_Q2D_FACTOR * gamma_tilde(2.10, p["n_peak_as3"])
+    record("T16b q2d_parameters: l_z = l_ho/xi and gamma = (2/sqrt5) gamma_3D",
+           f"l_z {p['l_z']:.4f} vs {lx:.4f}; gamma {p['gamma']:.5f} vs {g_lhy:.5f}",
+           "identical", abs(lx - p["l_z"]) < 1e-9 and abs(g_lhy - p["gamma"]) < 1e-14)
 
 
 # ----------------------------------------------------------------- T9
@@ -951,10 +1012,11 @@ if __name__ == "__main__":
     t_start = time.time()
     for t in (t1_plane_wave, t2_order, t3_thomas_fermi, t4_q5,
               t5_kernels, t6_vortex, t7_long_time_stability,
-              t8_quasi2d_kernel, t9_conservation_laws,
+              t8_quasi2d_kernel, t8g_bruteforce_3d_kernel, t9_conservation_laws,
               t10_minimizer, t11_vortex_detection_in_voids,
               t12_backend_selection, t13_trackA_analysis,
-              t14_matched_null, t15_persistent_count):
+              t14_matched_null, t15_persistent_count,
+              t16_v212_imprint_and_units):
         t()
     npass = sum(1 for *_, p in RESULTS if p)
     print(f"\n== {npass}/{len(RESULTS)} checks passed "
