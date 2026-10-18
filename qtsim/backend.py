@@ -54,7 +54,7 @@ def get_backend(backend: str = "cpu"):
         raise RuntimeError(
             "backend='gpu' requested but CuPy is not installed. Install "
             "the CUDA build matching Colab's runtime, e.g.\n"
-            "    !pip install -q cupy-cuda12x\n"
+            "    !pip install -q cupy-cuda13x   (Colab CUDA 13 has it preinstalled)\n"
             "then restart and re-import qtsim. (Never falls back to CPU "
             "silently -- see qtsim/backend.py.)") from exc
     try:
