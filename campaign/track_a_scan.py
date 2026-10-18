@@ -109,6 +109,13 @@ def parse_args():
     p.add_argument("--dx", type=float, default=0.5,
                    help="grid spacing in xi (<=0.5 resolves the core)")
     p.add_argument("--T_stir", type=float, default=60.0)
+    p.add_argument("--T_cool", type=float, default=0.0,
+                   help="v2.10: damped-GPE cooling phase (tau) between "
+                        "stirring and free decay; removes sound energy.  "
+                        "0 = off (identical to v2.9).")
+    p.add_argument("--gamma_cool", type=float, default=0.0,
+                   help="v2.10: dimensionless damping of the cooling phase, "
+                        "i dpsi/dt = (1 - i gamma)(H - mu) psi")
     p.add_argument("--T_decay", type=float, default=200.0)
     p.add_argument("--sample_every", type=float, default=0.5,
                    help="diagnostic sampling interval in tau")
@@ -241,6 +248,30 @@ def make_stirrers(grid, mu, Ma, n_stir=1, sigma=3.0, V0_factor=1.5):
         return V
 
     return V_stir, V0, radius
+
+
+def step_damped(solver, dt, gamma, norm_target):
+    """One Strang step of the damped GPE (v2.10 cooling phase).
+
+        i dpsi/dt = (1 - i gamma) (H - mu) psi
+
+    Same splitting as EGPESolver.step_real with every phase factor
+    exp(-i X dt) replaced by exp(-(i + gamma) X dt), then the norm is reset
+    to `norm_target`; the renormalisation plays the role of mu (as in
+    step_imag).  A mode of energy eps decays as exp(-gamma eps t), so
+    sound is removed while the (slow) vortex flow is only weakly
+    affected -- vortices still drift and annihilate (mutual friction ~
+    gamma), which is why nv is recorded before and after cooling.
+    Kept here, not in qtsim/solver.py, so the validated solver is untouched.
+    """
+    xp = solver.g.xp
+    c = 1j + float(gamma)
+    halfK = xp.exp(-c * solver.g.k2 * dt / 2.0)
+    solver.psi = solver._ifft(halfK * solver._fft(solver.psi))
+    n = xp.abs(solver.psi) ** 2
+    solver.psi = solver.psi * xp.exp(-c * solver._W(n) * dt)
+    solver.psi = solver._ifft(halfK * solver._fft(solver.psi))
+    solver.psi *= xp.sqrt(norm_target / solver.norm())
 
 
 def make_tracker(args, grid):
@@ -737,12 +768,15 @@ def fisher_combined(ps):
 # every point.  Points are now matched on all of these.
 KEY_FIELDS = ("eps_dd", "l_z", "n0_as3", "Ma", "seed", "cells", "dx",
               "T_stir", "T_decay", "sample_every", "n_stir", "V0_factor",
-              "count_version", "persist", "persist_radius")
-# v2.8: the last three change the MEASUREMENT (which vortex counts are
-# recorded), not the physics.  Runs from <= v2.7 lack them and are read
-# with LEGACY values (count_version 1 = masked count only, no filter).
+              "count_version", "persist", "persist_radius",
+              "T_cool", "gamma_cool")
+# v2.8: count_version/persist/persist_radius change the MEASUREMENT (which
+# vortex counts are recorded), not the physics.  Runs from <= v2.7 lack
+# them and are read with LEGACY values (count_version 1 = masked count
+# only, no filter).  v2.10: runs from <= v2.9 had no cooling phase.
 LEGACY = {"sample_every": 0.5, "count_version": 1, "persist": 1,
-          "persist_radius": 0.0}
+          "persist_radius": 0.0, "T_cool": 0.0, "gamma_cool": 0.0}
+COOL_FIELDS = ("T_cool", "gamma_cool")
 COUNT_FIELDS = ("count_version", "persist", "persist_radius")
 
 
@@ -762,13 +796,20 @@ def point_params(args, Ma, seed):
                 count_version=int(args.count_version
                                   if args.count_version is not None else 3),
                 persist=int(args.persist),
-                persist_radius=float(args.persist_radius))
+                persist_radius=float(args.persist_radius),
+                T_cool=float(args.T_cool),
+                gamma_cool=float(args.gamma_cool))
 
 
 def param_key(pp):
-    """Stable 10-hex-digit hash of a point_params dict (floats rounded)."""
+    """Stable 10-hex-digit hash of a point_params dict (floats rounded).
+
+    v2.10: the cooling fields enter the hash only when cooling is on, so
+    every uncooled point keeps the exact key it had in v2.9."""
+    cool = float(pp.get("T_cool", 0.0)) > 0
     norm = {k: (round(float(pp[k]), 9) if isinstance(pp[k], float)
-                else pp[k]) for k in KEY_FIELDS}
+                else pp[k]) for k in KEY_FIELDS
+            if cool or k not in COOL_FIELDS}
     blob = json.dumps(norm, sort_keys=True)
     return hashlib.sha1(blob.encode()).hexdigest()[:10]
 
@@ -776,9 +817,11 @@ def param_key(pp):
 def run_title(pp):
     """Human-readable run title.  Includes the box and decay time so the
     folder name alone no longer hides an 8-cell or long-decay run."""
-    return ("trackA Ma%.2f seed%d eps%.3f c%d Td%g k%s"
+    cool = ("C%gg%g " % (pp["T_cool"], pp["gamma_cool"])
+            if pp.get("T_cool", 0.0) > 0 else "")
+    return ("trackA Ma%.2f seed%d eps%.3f c%d Td%g %sk%s"
             % (pp["Ma"], pp["seed"], pp["eps_dd"], pp["cells"],
-               pp["T_decay"], param_key(pp)))
+               pp["T_decay"], cool, param_key(pp)))
 
 
 def stored_matches(stored, want, legacy_defaults=None, ignore=()):
@@ -891,6 +934,24 @@ def run_point(archive, args, scales, Ma, seed):
     # directly into _W(n) = self.V + n + ... where n is device-resident,
     # so a plain host np.zeros() here raised the same TypeError on gpu.
     solver.V = grid.xp.zeros(grid.shape)
+
+    # ---- v2.10: optional damped cooling phase (removes sound) ------------
+    rc = None
+    if args.T_cool > 0:
+        if args.gamma_cool <= 0:
+            raise ValueError("--T_cool > 0 needs --gamma_cool > 0")
+        rc = sample(solver, grid, t, d, area, tracker)
+        rc["phase"] = "cool_start"
+        recs.append(rc)
+        Nc = solver.norm()
+        for k in range(int(args.T_cool / dt)):
+            step_damped(solver, dt, args.gamma_cool, Nc)
+            t += dt
+            if k % every == 0:
+                r = sample(solver, grid, t, d, area, tracker)
+                r["phase"] = "cool"
+                recs.append(r)
+
     E0, N0 = solver.energy()["total"], solver.norm()
     r = sample(solver, grid, t, d, area, tracker)
     r["phase"] = "decay_start"
@@ -901,6 +962,14 @@ def run_point(archive, args, scales, Ma, seed):
              100 * r["mask_imbalance"],
              "" if r["mask_trustworthy"] else "  [MASK SUSPECT]"),
           flush=True)
+    if rc is not None:
+        print("    end of cooling (%g tau, gamma %g): nv_lat %s -> %s | "
+              "Ec/N %.3f -> %.3f | Ei/N %.3f -> %.3f | droplets %s -> %s"
+              % (args.T_cool, args.gamma_cool, rc.get("nv_lat"),
+                 r.get("nv_lat"), rc["E_comp"] / rc["norm"],
+                 r["E_comp"] / r["norm"], rc["E_incomp"] / rc["norm"],
+                 r["E_incomp"] / r["norm"], rc.get("n_droplets"),
+                 r.get("n_droplets")), flush=True)
 
     # ---- free decay ------------------------------------------------------
     i_dec = 0
@@ -989,7 +1058,17 @@ def run_point(archive, args, scales, Ma, seed):
         slip_rate=slip_rate(),
         count_version=pp["count_version"], persist=pp["persist"],
         persist_radius=pp["persist_radius"], snapshots=S,
-        d_droplet=d, lambda_roton=lam)
+        d_droplet=d, lambda_roton=lam,
+        # v2.10: sound energy per particle (kinetic Helmholtz split, no
+        # quantum-pressure term) and the cooling phase, if any
+        T_cool=pp["T_cool"], gamma_cool=pp["gamma_cool"],
+        Ec_per_N_at_decay_start=float(r["E_comp"] / r["norm"]),
+        Ei_per_N_at_decay_start=float(r["E_incomp"] / r["norm"]),
+        Ec_per_N_at_cool_start=(float(rc["E_comp"] / rc["norm"])
+                                if rc is not None else None),
+        nv_lat_at_cool_start=rc.get("nv_lat") if rc is not None else None,
+        n_droplets_at_cool_start=(rc.get("n_droplets")
+                                  if rc is not None else None))
 
     run.save_diagnostics(recs, name="timeseries", verbose=False)
     run.save_diagnostics(av, name="avalanches", verbose=False)
