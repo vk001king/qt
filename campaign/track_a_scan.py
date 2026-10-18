@@ -116,6 +116,12 @@ def parse_args():
     p.add_argument("--gamma_cool", type=float, default=0.0,
                    help="v2.10: dimensionless damping of the cooling phase, "
                         "i dpsi/dt = (1 - i gamma)(H - mu) psi")
+    p.add_argument("--reheat_frac", type=float, default=0.0,
+                   help="v2.11: after cooling, put back this fraction of the "
+                        "SOUND removed by cooling as a smooth phase imprint "
+                        "(curl-free flow, no new vortices) whose spectrum "
+                        "copies the removed compressible spectrum.  "
+                        "0 = off.  Needs --T_cool > 0.")
     p.add_argument("--T_decay", type=float, default=200.0)
     p.add_argument("--sample_every", type=float, default=0.5,
                    help="diagnostic sampling interval in tau")
@@ -155,7 +161,7 @@ def parse_args():
                    help="'cpu' (NumPy, default) or 'gpu' (CuPy).  GPU must be "
                         "requested explicitly; a request with no CuPy/GPU "
                         "present raises rather than silently running on CPU. "
-                        "In Colab, install first: !pip install -q cupy-cuda12x")
+                        "In Colab (CUDA 13), cupy-cuda13x is preinstalled; otherwise !pip install -q cupy-cuda13x")
     return p.parse_args()
 
 
@@ -272,6 +278,64 @@ def step_damped(solver, dt, gamma, norm_target):
     solver.psi = solver.psi * xp.exp(-c * solver._W(n) * dt)
     solver.psi = solver._ifft(halfK * solver._fft(solver.psi))
     solver.psi *= xp.sqrt(norm_target / solver.norm())
+
+
+def compressible_spectrum(psi, grid, edges, floor=1e-12):
+    """Shell sums of |w_c(k)|^2 (same w and split as helmholtz_split_2d,
+    same Parseval scale), binned in |k| with the host array `edges`.
+    Returns a host array, one value per bin (v2.11)."""
+    xp = grid.xp
+    fft, ifft = grid.fft_mod.fftn, grid.fft_mod.ifftn
+    n = xp.abs(psi) ** 2
+    psik = fft(psi)
+    wk = [fft(2.0 * xp.imag(xp.conj(psi) * ifft(1j * Ki * psik))
+              / xp.sqrt(xp.maximum(n, floor))) for Ki in grid.K]
+    k2 = xp.maximum(grid.k2, 1e-30)
+    kdotw = sum(Ki * wki for Ki, wki in zip(grid.K, wk))
+    P = sum(xp.abs(xp.where(grid.k2 == 0, 0.0, Ki * kdotw / k2)) ** 2
+            for Ki in grid.K)
+    P = grid.to_host(P) * (grid.dV / grid.Ntot)
+    kmag = np.sqrt(grid.to_host(grid.k2))
+    return np.histogram(kmag, bins=edges, weights=P)[0]
+
+
+def reheat_phase(solver, grid, S_before, S_after, edges, Ec_target, seed,
+                 iters=4):
+    """v2.11: imprint psi -> psi exp(i A phi) with a smooth random phase phi.
+
+    v = 2 grad(phi) is curl-free, so this adds compressible flow only and
+    no phase winding (no new vortices).  The spectrum of phi copies the
+    compressible spectrum removed by cooling, dS(k) = S_before - S_after
+    (clipped at 0): |phi_k| ~ sqrt(dS_bin / modes_in_bin) / |k|, random
+    phases from `seed`.  A is set by a few secant steps so that Ec/N right
+    after the imprint equals Ec_target.  Returns (A, Ec/N reached)."""
+    xp = grid.xp
+    kmag = np.sqrt(grid.to_host(grid.k2))
+    dS = np.clip(np.asarray(S_before) - np.asarray(S_after), 0.0, None)
+    M = np.histogram(kmag, bins=edges)[0]
+    per = np.where(M > 0, dS / np.maximum(M, 1), 0.0)
+    b = np.clip(np.digitize(kmag, edges) - 1, 0, len(per) - 1)
+    amp = np.where(kmag > 0, np.sqrt(per[b]) / np.maximum(kmag, 1e-30), 0.0)
+    rng = np.random.default_rng(int(seed) + 7919)
+    phik = amp * np.exp(2j * np.pi * rng.random(kmag.shape))
+    phi = np.real(np.fft.ifftn(phik))
+    phi = phi / np.sqrt(np.mean(phi ** 2))
+    phi_d = grid.asarray(phi)
+    psi0 = solver.psi.copy()
+    N = solver.norm()
+
+    def ec_at(A):
+        p = psi0 * xp.exp(1j * A * phi_d)
+        return helmholtz_split_2d(p, grid)[1] / N
+
+    E0 = helmholtz_split_2d(psi0, grid)[1] / N
+    A, EA = 0.1, ec_at(0.1)
+    for _ in range(iters):
+        c = max((EA - E0) / A ** 2, 1e-12)
+        A = float(np.sqrt(max(Ec_target - E0, 0.0) / c))
+        EA = ec_at(A)
+    solver.psi = psi0 * xp.exp(1j * A * phi_d)
+    return A, float(EA)
 
 
 def make_tracker(args, grid):
@@ -769,13 +833,14 @@ def fisher_combined(ps):
 KEY_FIELDS = ("eps_dd", "l_z", "n0_as3", "Ma", "seed", "cells", "dx",
               "T_stir", "T_decay", "sample_every", "n_stir", "V0_factor",
               "count_version", "persist", "persist_radius",
-              "T_cool", "gamma_cool")
+              "T_cool", "gamma_cool", "reheat_frac")
 # v2.8: count_version/persist/persist_radius change the MEASUREMENT (which
 # vortex counts are recorded), not the physics.  Runs from <= v2.7 lack
 # them and are read with LEGACY values (count_version 1 = masked count
 # only, no filter).  v2.10: runs from <= v2.9 had no cooling phase.
 LEGACY = {"sample_every": 0.5, "count_version": 1, "persist": 1,
-          "persist_radius": 0.0, "T_cool": 0.0, "gamma_cool": 0.0}
+          "persist_radius": 0.0, "T_cool": 0.0, "gamma_cool": 0.0,
+          "reheat_frac": 0.0}
 COOL_FIELDS = ("T_cool", "gamma_cool")
 COUNT_FIELDS = ("count_version", "persist", "persist_radius")
 
@@ -797,19 +862,25 @@ def point_params(args, Ma, seed):
                                   if args.count_version is not None else 3),
                 persist=int(args.persist),
                 persist_radius=float(args.persist_radius),
-                T_cool=float(args.T_cool),
-                gamma_cool=float(args.gamma_cool))
+                # getattr: callers that build args by hand (validation T13)
+                # predate these fields; absent means "off", as in LEGACY
+                T_cool=float(getattr(args, "T_cool", 0.0)),
+                gamma_cool=float(getattr(args, "gamma_cool", 0.0)),
+                reheat_frac=float(getattr(args, "reheat_frac", 0.0)))
 
 
 def param_key(pp):
     """Stable 10-hex-digit hash of a point_params dict (floats rounded).
 
     v2.10: the cooling fields enter the hash only when cooling is on, so
-    every uncooled point keeps the exact key it had in v2.9."""
+    every uncooled point keeps the exact key it had in v2.9.  v2.11: the
+    same for reheat_frac (enters only when > 0)."""
     cool = float(pp.get("T_cool", 0.0)) > 0
+    reheat = float(pp.get("reheat_frac", 0.0)) > 0
     norm = {k: (round(float(pp[k]), 9) if isinstance(pp[k], float)
                 else pp[k]) for k in KEY_FIELDS
-            if cool or k not in COOL_FIELDS}
+            if (cool or k not in COOL_FIELDS)
+            and (reheat or k != "reheat_frac")}
     blob = json.dumps(norm, sort_keys=True)
     return hashlib.sha1(blob.encode()).hexdigest()[:10]
 
@@ -819,6 +890,10 @@ def run_title(pp):
     folder name alone no longer hides an 8-cell or long-decay run."""
     cool = ("C%gg%g " % (pp["T_cool"], pp["gamma_cool"])
             if pp.get("T_cool", 0.0) > 0 else "")
+    if pp.get("reheat_frac", 0.0) > 0:      # v2.11: keep under 60 chars
+        return ("trackA Ma%.2f seed%d c%d Td%g %sR%g k%s"
+                % (pp["Ma"], pp["seed"], pp["cells"], pp["T_decay"], cool,
+                   pp["reheat_frac"], param_key(pp)))
     return ("trackA Ma%.2f seed%d eps%.3f c%d Td%g %sk%s"
             % (pp["Ma"], pp["seed"], pp["eps_dd"], pp["cells"],
                pp["T_decay"], cool, param_key(pp)))
@@ -937,20 +1012,46 @@ def run_point(archive, args, scales, Ma, seed):
 
     # ---- v2.10: optional damped cooling phase (removes sound) ------------
     rc = None
-    if args.T_cool > 0:
-        if args.gamma_cool <= 0:
+    if pp["T_cool"] > 0:
+        if pp["gamma_cool"] <= 0:
             raise ValueError("--T_cool > 0 needs --gamma_cool > 0")
         rc = sample(solver, grid, t, d, area, tracker)
         rc["phase"] = "cool_start"
         recs.append(rc)
+        if pp["reheat_frac"] > 0:
+            k_edges = np.linspace(0.0, float(np.sqrt(
+                grid.to_host(grid.k2).max())) + 1e-9, 49)
+            S_before = compressible_spectrum(solver.psi, grid, k_edges)
         Nc = solver.norm()
-        for k in range(int(args.T_cool / dt)):
-            step_damped(solver, dt, args.gamma_cool, Nc)
+        for k in range(int(pp["T_cool"] / dt)):
+            step_damped(solver, dt, pp["gamma_cool"], Nc)
             t += dt
             if k % every == 0:
                 r = sample(solver, grid, t, d, area, tracker)
                 r["phase"] = "cool"
                 recs.append(r)
+    elif pp["reheat_frac"] > 0:
+        raise ValueError("--reheat_frac needs --T_cool > 0")
+
+    # ---- v2.11: optional reheat -- put the removed SOUND back ------------
+    rh = None
+    if pp["reheat_frac"] > 0:
+        S_after = compressible_spectrum(solver.psi, grid, k_edges)
+        Ec_c = float(helmholtz_split_2d(solver.psi, grid)[1] / solver.norm())
+        Ec_0 = float(rc["E_comp"] / rc["norm"])
+        # A phase-only imprint starts as pure flow; real sound shares its
+        # energy between flow and density (equipartition), so the flow
+        # part of the removed sound is put back twice over and settles to
+        # about half within a sound period.  Checked afterwards from the
+        # E_comp timeseries, not assumed.
+        target = Ec_c + 2.0 * pp["reheat_frac"] * max(Ec_0 - Ec_c, 0.0)
+        A, Ec_r = reheat_phase(solver, grid, S_before, S_after, k_edges,
+                               target, seed)
+        rh = dict(Ec_before_cool=Ec_0, Ec_after_cool=Ec_c,
+                  Ec_target_imprint=float(target), Ec_after_imprint=Ec_r,
+                  amplitude=A, k_edges=[float(x) for x in k_edges],
+                  S_before=[float(x) for x in S_before],
+                  S_after=[float(x) for x in S_after])
 
     E0, N0 = solver.energy()["total"], solver.norm()
     r = sample(solver, grid, t, d, area, tracker)
@@ -965,11 +1066,17 @@ def run_point(archive, args, scales, Ma, seed):
     if rc is not None:
         print("    end of cooling (%g tau, gamma %g): nv_lat %s -> %s | "
               "Ec/N %.3f -> %.3f | Ei/N %.3f -> %.3f | droplets %s -> %s"
-              % (args.T_cool, args.gamma_cool, rc.get("nv_lat"),
+              % (pp["T_cool"], pp["gamma_cool"], rc.get("nv_lat"),
                  r.get("nv_lat"), rc["E_comp"] / rc["norm"],
                  r["E_comp"] / r["norm"], rc["E_incomp"] / rc["norm"],
                  r["E_incomp"] / r["norm"], rc.get("n_droplets"),
                  r.get("n_droplets")), flush=True)
+    if rh is not None:
+        print("    reheat (frac %g): Ec/N before cool %.3f, after cool %.3f, "
+              "imprint target %.3f, reached %.3f (A %.3f)"
+              % (pp["reheat_frac"], rh["Ec_before_cool"], rh["Ec_after_cool"],
+                 rh["Ec_target_imprint"], rh["Ec_after_imprint"],
+                 rh["amplitude"]), flush=True)
 
     # ---- free decay ------------------------------------------------------
     i_dec = 0
@@ -1068,7 +1175,8 @@ def run_point(archive, args, scales, Ma, seed):
                                 if rc is not None else None),
         nv_lat_at_cool_start=rc.get("nv_lat") if rc is not None else None,
         n_droplets_at_cool_start=(rc.get("n_droplets")
-                                  if rc is not None else None))
+                                  if rc is not None else None),
+        reheat_frac=pp["reheat_frac"], reheat=rh)
 
     run.save_diagnostics(recs, name="timeseries", verbose=False)
     run.save_diagnostics(av, name="avalanches", verbose=False)
